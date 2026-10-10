@@ -312,6 +312,90 @@ export default function App() {
     }
   }, [activeJobId])
 
+  // Real persistence of operator notes to backend SQLite
+  const handleUpdateTargetNotes = useCallback(async (targetId, notes) => {
+    setTargets(prev => prev.map(t => (t.id === targetId ? { ...t, operatorNotes: notes } : t)))
+
+    if (activeJobId) {
+      try {
+        const target = targets.find(t => t.id === targetId)
+        await updateDetectionReview(activeJobId, targetId, target?.status || 'Detected', notes)
+      } catch (err) {
+        console.warn('Could not persist operator notes to database:', err)
+      }
+    }
+  }, [activeJobId, targets])
+
+  // Batch status update for filtered targets
+  const handleBatchUpdateStatus = useCallback(async (targetIds, newStatus) => {
+    setTargets(prev => prev.map(t => (targetIds.includes(t.id) ? { ...t, status: newStatus } : t)))
+
+    if (activeJobId) {
+      try {
+        await Promise.all(
+          targetIds.map(id => updateDetectionReview(activeJobId, id, newStatus))
+        )
+      } catch (err) {
+        console.warn('Could not persist batch review to database:', err)
+      }
+    }
+  }, [activeJobId])
+
+  // ── Workstation Operator Keyboard Shortcuts ─────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target?.tagName)) return
+
+      if (e.key === 'c' || e.key === 'C') {
+        if (selectedTarget) {
+          e.preventDefault()
+          handleUpdateTargetStatus(selectedTarget.id, 'Confirmed')
+        }
+      } else if (e.key === 'f' || e.key === 'F') {
+        if (selectedTarget) {
+          e.preventDefault()
+          handleUpdateTargetStatus(selectedTarget.id, 'Pending Review')
+        }
+      } else if (e.key === 'x' || e.key === 'X') {
+        if (selectedTarget) {
+          e.preventDefault()
+          handleUpdateTargetStatus(selectedTarget.id, 'False Positive')
+        }
+      } else if (e.key === 'ArrowDown' || e.key === 'j') {
+        if (filteredTargets.length > 0) {
+          e.preventDefault()
+          const curIdx = filteredTargets.findIndex(t => t.id === selectedTarget?.id)
+          const nextIdx = (curIdx + 1) % filteredTargets.length
+          setSelectedTargetId(filteredTargets[nextIdx].id)
+        }
+      } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        if (filteredTargets.length > 0) {
+          e.preventDefault()
+          const curIdx = filteredTargets.findIndex(t => t.id === selectedTarget?.id)
+          const prevIdx = curIdx <= 0 ? filteredTargets.length - 1 : curIdx - 1
+          setSelectedTargetId(filteredTargets[prevIdx].id)
+        }
+      } else if (e.key === 'u' || e.key === 'U') {
+        e.preventDefault()
+        setIsUploadOpen(true)
+      } else if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault()
+        setIsExportOpen(true)
+      } else if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault()
+        setIsHistoryOpen(true)
+      } else if (e.key === 'Escape') {
+        setIsUploadOpen(false)
+        setIsExportOpen(false)
+        setIsHistoryOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [selectedTarget, filteredTargets, handleUpdateTargetStatus])
+
+
   const handleHistoryJob = useCallback((jobData) => {
     if (!jobData) return
     setActiveJobId(jobData.job_id)
@@ -427,6 +511,8 @@ export default function App() {
               selectedTarget={selectedTarget}
               targets={targets}
               onUpdateTargetStatus={handleUpdateTargetStatus}
+              onUpdateTargetNotes={handleUpdateTargetNotes}
+              onSelectTarget={setSelectedTargetId}
               onOpenExport={() => setIsExportOpen(true)}
               onOpenUpload={() => setIsUploadOpen(true)}
               onFileSelected={handleFileSelected}
@@ -440,6 +526,7 @@ export default function App() {
           selectedTargetId={selectedTargetId}
           onSelectTarget={setSelectedTargetId}
           onUpdateTargetStatus={handleUpdateTargetStatus}
+          onBatchUpdateStatus={handleBatchUpdateStatus}
           collapsed={logCollapsed}
           onToggleCollapse={() => setLogCollapsed(c => !c)}
         />

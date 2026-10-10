@@ -40,6 +40,53 @@
   color: #f1f5f9;
 }
 
+.ti-counter {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #64748b;
+  margin-left: 2px;
+}
+
+.ti-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ti-nav-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ti-nav-btn {
+  background: #1c2028;
+  border: 1px solid #2e3542;
+  border-radius: 3px;
+  color: #94a3b8;
+  width: 18px;
+  height: 18px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ti-nav-btn:hover:not(:disabled) {
+  background: #252b36;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
+.ti-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .ti-badge {
   font-family: var(--font-mono);
   font-size: 9px;
@@ -111,6 +158,31 @@
   border-radius: 3px;
 }
 
+.ti-download-crop-btn {
+  position: absolute;
+  bottom: 6px;
+  right: 6px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #282f3a;
+  border-radius: 3px;
+  color: #cbd5e1;
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 3px 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+
+.ti-download-crop-btn:hover {
+  background: #1e2430;
+  border-color: #3b82f6;
+  color: #ffffff;
+}
+
 /* Info Cards */
 .ti-card {
   background: #181c23;
@@ -129,6 +201,111 @@
   color: #64748b;
   letter-spacing: 0.5px;
   margin-bottom: 2px;
+}
+
+/* Shadow Calculator Grid */
+.ti-calc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ti-calc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ti-calc-lbl {
+  font-family: var(--font-ui);
+  font-size: 8.5px;
+  color: #64748b;
+}
+
+.ti-calc-input {
+  background: #101318;
+  border: 1px solid #282f3a;
+  border-radius: 3px;
+  color: #f1f5f9;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 3px 6px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ti-calc-input:focus {
+  border-color: #3b82f6;
+}
+
+.ti-calc-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #101318;
+  border: 1px solid #242a34;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-top: 4px;
+}
+
+.ti-calc-result-lbl {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  color: #94a3b8;
+}
+
+.ti-calc-result-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #38bdf8;
+}
+
+/* Operator Notes */
+.ti-notes-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #101318;
+  border: 1px solid #282f3a;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  line-height: 1.4;
+  padding: 6px 8px;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ti-notes-input:focus {
+  border-color: #3b82f6;
+}
+
+.ti-notes-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.ti-notes-save-btn {
+  background: #1c2028;
+  border: 1px solid #282f3a;
+  border-radius: 4px;
+  color: #93c5fd;
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.ti-notes-save-btn:hover {
+  background: #252b36;
+  border-color: #3b82f6;
+  color: #ffffff;
 }
 
 .ti-card-row {

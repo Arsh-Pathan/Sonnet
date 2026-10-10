@@ -106,6 +106,20 @@
   color: #93c5fd;
 }
 
+.sonar-tb-btn--measuring {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: #0284c7;
+  color: #38bdf8;
+}
+
+.sonar-tb-zoom-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: #94a3b8;
+  padding: 0 4px;
+}
+
 .sonar-tb-icon-btn {
   background: #1c2028;
   border: 1px solid #2e3542;
@@ -160,17 +174,33 @@
   font-weight: 600;
 }
 
-/* Stage & Canvas */
-.sonar-view__stage {
+/* Viewport & Pan-Zoom Stage */
+.sonar-view__viewport {
   flex: 1;
   position: relative;
   overflow: hidden;
+  background: #080a0d;
+  cursor: default;
+  user-select: none;
+}
+
+.sonar-view__viewport--panning {
+  cursor: grabbing !important;
+}
+
+.sonar-view__viewport--measuring {
+  cursor: crosshair !important;
+}
+
+.sonar-view__stage {
+  width: 100%;
+  height: 100%;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #080a0d;
   transform-origin: center center;
-  transition: transform 0.15s ease-out;
+  will-change: transform;
 }
 
 .sonar-view__canvas {
@@ -178,6 +208,75 @@
   height: 100%;
   object-fit: fill;
   display: block;
+}
+
+/* Real-time Cursor Telemetry HUD */
+.sonar-cursor-hud {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  background: rgba(16, 18, 22, 0.88);
+  backdrop-filter: blur(4px);
+  border: 1px solid #282f3a;
+  border-radius: 4px;
+  padding: 3px 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #94a3b8;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.sonar-hud-segment strong {
+  color: #e2e8f0;
+}
+
+.sonar-hud-sep {
+  color: #475569;
+}
+
+/* Acoustic Measurement Results HUD */
+.sonar-measure-hud {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(6px);
+  border: 1px solid #0284c7;
+  border-radius: 5px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #cbd5e1;
+  z-index: 25;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sonar-measure-title {
+  font-size: 9px;
+  font-weight: 700;
+  color: #38bdf8;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #1e293b;
+  padding-bottom: 3px;
+  margin-bottom: 2px;
+}
+
+.sonar-measure-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sonar-measure-row strong {
+  color: #ffffff;
 }
 
 /* Channel Indicators */

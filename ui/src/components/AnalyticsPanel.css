@@ -195,3 +195,170 @@
   font-weight: 600;
   color: #f1f5f9;
 }
+
+/* Dual Grid Layout */
+.analytics-dual-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .analytics-dual-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analytics-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.analytics-card-badge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+
+/* Swath Distribution */
+.analytics-swath-summary {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.analytics-swath-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.analytics-swath-col--stbd {
+  text-align: right;
+}
+
+.analytics-swath-name {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  letter-spacing: 0.4px;
+}
+
+.analytics-swath-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.analytics-swath-desc {
+  font-size: 9.5px;
+  color: #64748b;
+}
+
+.analytics-swath-bar {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  background: #242a34;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #2d3542;
+}
+
+.analytics-swath-bar__port {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.3s ease;
+}
+
+.analytics-swath-bar__stbd {
+  height: 100%;
+  background: #0ea5e9;
+  transition: width 0.3s ease;
+}
+
+.analytics-swath-legend {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.analytics-legend-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.analytics-legend-dot--port { background: #3b82f6; }
+.analytics-legend-dot--stbd { background: #0ea5e9; }
+
+/* Stacked Multi-Segment Progress Bar */
+.analytics-stacked-bar {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  background: #242a34;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #2d3542;
+  margin-bottom: 8px;
+}
+
+.analytics-stacked-seg {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.analytics-stacked-seg--green { background: #22c55e; }
+.analytics-stacked-seg--amber { background: #f59e0b; }
+.analytics-stacked-seg--red   { background: #ef4444; }
+.analytics-stacked-seg--gray  { background: #475569; }
+
+/* Footprint profile block */
+.analytics-footprint-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #242a34;
+}
+
+.analytics-footprint-title {
+  display: block;
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.analytics-footprint-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.analytics-footprint-chip {
+  background: #14171d;
+  border: 1px solid #282f3a;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 9.5px;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+}
+
+.analytics-footprint-chip strong {
+  color: #f1f5f9;
+}
+

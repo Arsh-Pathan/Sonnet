@@ -21,6 +21,8 @@ function getCanvasFilter(displaySettings) {
       return `sepia(80%) saturate(200%) hue-rotate(345deg) brightness(${bVal}) contrast(${cVal})`
     case 'MultiBronze':
       return `sepia(90%) saturate(240%) hue-rotate(355deg) brightness(${bVal * 1.05}) contrast(${cVal * 1.1})`
+    case 'Inverted':
+      return `invert(100%) grayscale(100%) brightness(${bVal}) contrast(${cVal})`
     case 'MytisBronze':
     default:
       return `sepia(80%) saturate(180%) hue-rotate(350deg) brightness(${bVal}) contrast(${cVal})`
@@ -42,15 +44,36 @@ export default function SonarView({
 }) {
   const canvasRef = useRef(null)
   const imgRef = useRef(null)
+  const stageRef = useRef(null)
+  const viewportRef = useRef(null)
   const fileInputRef = useRef(null)
+
+  // Zoom & Pan state for hydrographic workstation inspection
   const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [isPanning, setIsPanning] = useState(false)
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 })
+
+  // Overlays & Hover
   const [showOverlays, setShowOverlays] = useState(true)
   const [hoveredTargetId, setHoveredTargetId] = useState(null)
   const [isDragOver, setIsDragOver] = useState(false)
   const [imageDims, setImageDims] = useState({ width: 1376, height: 768 })
 
+  // Interactive Measurement & Shadow Calculation Tool
+  const [isMeasuring, setIsMeasuring] = useState(false)
+  const [measurePts, setMeasurePts] = useState([])
+  const [cursorPos, setCursorPos] = useState(null)
+
   const activeImageSrc = imageUrl || DEFAULT_SONAR_IMAGE
 
+  // Reset Pan and Zoom
+  const handleResetZoomPan = useCallback(() => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [])
+
+  // Drag and drop sonar survey file
   const handleDragOver = (e) => {
     e.preventDefault()
     e.stopPropagation()
@@ -81,7 +104,7 @@ export default function SonarView({
     e.target.value = ''
   }
 
-  // Draw acoustic sonar frame to canvas whenever image or display settings change
+  // Draw acoustic sonar frame to canvas with full native resolution
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -118,6 +141,62 @@ export default function SonarView({
     }
   }, [activeImageSrc, displaySettings])
 
+  // Mouse wheel zoom centered at cursor
+  const handleWheel = (e) => {
+    e.preventDefault()
+    const zoomFactor = e.deltaY < 0 ? 1.15 : 0.87
+    setZoom(prev => Math.min(4.0, Math.max(0.5, Number((prev * zoomFactor).toFixed(2)))))
+  }
+
+  // Mouse Down for Panning or Measurement
+  const handleMouseDown = (e) => {
+    if (e.button === 1 || (!isMeasuring && e.button === 0 && (zoom > 1 || e.altKey || e.shiftKey))) {
+      setIsPanning(true)
+      setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y })
+      return
+    }
+
+    if (isMeasuring && e.button === 0 && viewportRef.current) {
+      const rect = viewportRef.current.getBoundingClientRect()
+      const normX = Math.max(0, Math.min(1, (e.clientX - rect.left - pan.x) / (rect.width * zoom)))
+      const normY = Math.max(0, Math.min(1, (e.clientY - rect.top - pan.y) / (rect.height * zoom)))
+
+      if (measurePts.length >= 2) {
+        setMeasurePts([{ x: normX, y: normY }])
+      } else {
+        setMeasurePts(prev => [...prev, { x: normX, y: normY }])
+      }
+    }
+  }
+
+  // Mouse Move for Panning or Cursor HUD Coordinates
+  const handleMouseMove = (e) => {
+    if (viewportRef.current) {
+      const rect = viewportRef.current.getBoundingClientRect()
+      const normX = Math.max(0, Math.min(1, (e.clientX - rect.left - pan.x) / (rect.width * zoom)))
+      const normY = Math.max(0, Math.min(1, (e.clientY - rect.top - pan.y) / (rect.height * zoom)))
+
+      // Across-track range: Nadir 0m in center, -100m Port to +100m Starboard
+      const rangeM = ((normX - 0.5) * 200).toFixed(1)
+      const channel = normX < 0.5 ? 'PORT' : 'STBD'
+      const pxX = Math.round(normX * imageDims.width)
+      const pxY = Math.round(normY * imageDims.height)
+
+      setCursorPos({ normX, normY, rangeM, channel, pxX, pxY })
+    }
+
+    if (isPanning) {
+      setPan({
+        x: e.clientX - panStart.x,
+        y: e.clientY - panStart.y,
+      })
+    }
+  }
+
+  const handleMouseUp = () => {
+    setIsPanning(false)
+  }
+
   // Normalize targets for bounding box rendering with real detection IDs and coordinates
   const normalizedTargets = (targets || []).map((t, idx) => {
     let bx = 0, by = 0, bw = 0, bh = 0
@@ -151,6 +230,29 @@ export default function SonarView({
 
   const displayName = sourceFileName || (hasUploadedScan ? 'Uploaded Sonar Scan' : 'Reference Shipwreck Scan (780 kHz)')
 
+  // Calculate measurement vector if 2 points are selected
+  let measurementResult = null
+  if (measurePts.length === 2) {
+    const p1 = measurePts[0]
+    const p2 = measurePts[1]
+    const dxM = Math.abs(p2.x - p1.x) * 200 // across-track 200m swath
+    const dyM = Math.abs(p2.y - p1.y) * 200 // along-track distance
+    const distM = Math.sqrt(dxM * dxM + dyM * dyM)
+
+    // Slant range to target from nadir (center line at 0.5)
+    const slantRangeM = Math.max(10, Math.abs(p1.x - 0.5) * 200)
+    // Acoustic shadow height approximation: H = (ShadowLength * TowfishAltitude) / SlantRange
+    const assumedAltitudeM = 15.0
+    const estHeightM = (distM * assumedAltitudeM) / slantRangeM
+
+    measurementResult = {
+      distM: distM.toFixed(2),
+      dxM: dxM.toFixed(2),
+      dyM: dyM.toFixed(2),
+      estHeightM: estHeightM.toFixed(2),
+    }
+  }
+
   return (
     <div
       className="sonar-view"
@@ -178,7 +280,7 @@ export default function SonarView({
             type="button"
             className="sonar-tb-btn sonar-tb-btn--primary"
             onClick={() => fileInputRef.current?.click()}
-            title="Upload your own side-scan sonar image (.png, .jpg, .tiff) or raw survey log"
+            title="Upload side-scan sonar image (.png, .jpg, .tiff) or raw survey log"
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 4 }}>
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -201,11 +303,41 @@ export default function SonarView({
 
           <span className="sonar-tb-sep" />
 
+          {/* Interactive Acoustic Measurement Tool Toggle */}
+          <button
+            type="button"
+            className={`sonar-tb-btn ${isMeasuring ? 'sonar-tb-btn--measuring' : ''}`}
+            onClick={() => {
+              setIsMeasuring(m => !m)
+              setMeasurePts([])
+            }}
+            title="Acoustic Distance & Shadow Height Measurement Tool"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 4 }}>
+              <path d="M2 12h20M7 8v8M17 8v8M12 10v4" />
+            </svg>
+            {isMeasuring ? 'MEASURE: ON' : 'MEASURE (M)'}
+          </button>
+
+          {isMeasuring && measurePts.length > 0 && (
+            <button
+              type="button"
+              className="sonar-tb-btn"
+              onClick={() => setMeasurePts([])}
+              title="Clear current measurement"
+            >
+              CLEAR
+            </button>
+          )}
+
+          <span className="sonar-tb-sep" />
+
+          {/* Zoom Controls & Presets */}
           <button
             type="button"
             className="sonar-tb-icon-btn"
-            title="Zoom In"
-            onClick={() => setZoom(z => Math.min(2.5, +(z + 0.2).toFixed(1)))}
+            title="Zoom In ([)"
+            onClick={() => setZoom(z => Math.min(4.0, +(z + 0.25).toFixed(2)))}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" />
@@ -214,8 +346,8 @@ export default function SonarView({
           <button
             type="button"
             className="sonar-tb-icon-btn"
-            title="Zoom Out"
-            onClick={() => setZoom(z => Math.max(0.6, +(z - 0.2).toFixed(1)))}
+            title="Zoom Out (])"
+            onClick={() => setZoom(z => Math.max(0.5, +(z - 0.25).toFixed(2)))}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" />
@@ -224,13 +356,15 @@ export default function SonarView({
           <button
             type="button"
             className="sonar-tb-icon-btn"
-            title="Reset Zoom / Fit"
-            onClick={() => setZoom(1)}
+            title="Reset Zoom & Pan (0)"
+            onClick={handleResetZoomPan}
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v18" />
             </svg>
           </button>
+
+          <span className="sonar-tb-zoom-badge">{Math.round(zoom * 100)}%</span>
 
           <span className="sonar-tb-sep" />
 
@@ -278,7 +412,7 @@ export default function SonarView({
         </div>
       )}
 
-      {/* 2. Hydrographic Ruler */}
+      {/* 2. Hydrographic Metric Ruler */}
       <div className="sonar-ruler">
         <span className="sonar-ruler__edge">PORT 100m</span>
         <span className="sonar-ruler__mark">-75m</span>
@@ -291,142 +425,237 @@ export default function SonarView({
         <span className="sonar-ruler__edge">100m STBD</span>
       </div>
 
-      {/* 3. Stage: Canvas + Overlays */}
-      <div className="sonar-view__stage" style={{ transform: `scale(${zoom})` }}>
-        <canvas
-          ref={canvasRef}
-          className="sonar-view__canvas"
-          width={1376}
-          height={768}
-        />
+      {/* 3. Stage: Interactive Viewport with Pan & Zoom */}
+      <div
+        ref={viewportRef}
+        className={`sonar-view__viewport ${isPanning ? 'sonar-view__viewport--panning' : ''} ${isMeasuring ? 'sonar-view__viewport--measuring' : ''}`}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+      >
+        <div
+          ref={stageRef}
+          className="sonar-view__stage"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            className="sonar-view__canvas"
+            width={1376}
+            height={768}
+          />
 
-        {/* Channel Badges */}
-        <div className="sonar-ch-badge sonar-ch-badge--port">PORT CHANNEL [CH 1]</div>
-        <div className="sonar-ch-badge sonar-ch-badge--starboard">STARBOARD CHANNEL [CH 2]</div>
+          {/* Channel Badges */}
+          <div className="sonar-ch-badge sonar-ch-badge--port">PORT CHANNEL [CH 1]</div>
+          <div className="sonar-ch-badge sonar-ch-badge--starboard">STARBOARD CHANNEL [CH 2]</div>
 
-        {/* Confirmed Targets Badge */}
-        <div className="sonar-confirmed-badge">
-          DETECTIONS: {normalizedTargets.length} | CONFIRMED: {confirmedCount}
-        </div>
+          {/* Confirmed Targets Badge */}
+          <div className="sonar-confirmed-badge">
+            DETECTIONS: {normalizedTargets.length} | CONFIRMED: {confirmedCount}
+          </div>
 
-        {/* Clean Detection Bounding Boxes & Reticles */}
-        {showOverlays && (
-          <>
-            <svg className="sonar-view__overlay" viewBox="0 0 1 1" preserveAspectRatio="none">
-              {normalizedTargets.map(t => {
-                const { bbox, id } = t
-                const isSelected = id === selectedTargetId
-                const isHovered = id === hoveredTargetId
+          {/* Clean Detection Bounding Boxes & Reticles */}
+          {showOverlays && (
+            <>
+              <svg className="sonar-view__overlay" viewBox="0 0 1 1" preserveAspectRatio="none">
+                {normalizedTargets.map(t => {
+                  const { bbox, id } = t
+                  const isSelected = id === selectedTargetId
+                  const isHovered = id === hoveredTargetId
 
-                const strokeColor = isSelected ? '#3b82f6' : isHovered ? '#60a5fa' : '#f59e0b'
-                const strokeWidth = isSelected ? 0.0035 : 0.002
-                const fillColor = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(245, 158, 11, 0.04)'
+                  const strokeColor = isSelected ? '#3b82f6' : isHovered ? '#60a5fa' : '#f59e0b'
+                  const strokeWidth = isSelected ? 0.0035 : 0.002
+                  const fillColor = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(245, 158, 11, 0.04)'
 
-                const cornerLenX = Math.min(0.02, bbox.w * 0.3)
-                const cornerLenY = Math.min(0.025, bbox.h * 0.3)
+                  const cornerLenX = Math.min(0.02, bbox.w * 0.3)
+                  const cornerLenY = Math.min(0.025, bbox.h * 0.3)
 
-                return (
-                  <g
-                    key={id}
-                    className="sonar-det-reticle"
-                    onClick={() => onSelectTarget?.(id)}
-                    onMouseEnter={() => setHoveredTargetId(id)}
-                    onMouseLeave={() => setHoveredTargetId(null)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    {/* Primary Bounding Box */}
-                    <rect
-                      x={bbox.x}
-                      y={bbox.y}
-                      width={bbox.w}
-                      height={bbox.h}
-                      fill={fillColor}
-                      stroke={strokeColor}
-                      strokeWidth={strokeWidth}
+                  return (
+                    <g
+                      key={id}
+                      className="sonar-det-reticle"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onSelectTarget?.(id)
+                      }}
+                      onMouseEnter={() => setHoveredTargetId(id)}
+                      onMouseLeave={() => setHoveredTargetId(null)}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      {/* Primary Bounding Box */}
+                      <rect
+                        x={bbox.x}
+                        y={bbox.y}
+                        width={bbox.w}
+                        height={bbox.h}
+                        fill={fillColor}
+                        stroke={strokeColor}
+                        strokeWidth={strokeWidth}
+                        vectorEffect="non-scaling-stroke"
+                      />
+
+                      {/* Corner Reinforcements for Selected Box */}
+                      {isSelected && (
+                        <>
+                          <path
+                            d={`M ${bbox.x + cornerLenX} ${bbox.y} L ${bbox.x} ${bbox.y} L ${bbox.x} ${bbox.y + cornerLenY}`}
+                            fill="none"
+                            stroke="#ffffff"
+                            strokeWidth={0.004}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                          <path
+                            d={`M ${bbox.x + bbox.w - cornerLenX} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y + cornerLenY}`}
+                            fill="none"
+                            stroke="#ffffff"
+                            strokeWidth={0.004}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                          <path
+                            d={`M ${bbox.x} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x} ${bbox.y + bbox.h} L ${bbox.x + cornerLenX} ${bbox.y + bbox.h}`}
+                            fill="none"
+                            stroke="#ffffff"
+                            strokeWidth={0.004}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                          <path
+                            d={`M ${bbox.x + bbox.w} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x + bbox.w} ${bbox.y + bbox.h} L ${bbox.x + bbox.w - cornerLenX} ${bbox.y + bbox.h}`}
+                            fill="none"
+                            stroke="#ffffff"
+                            strokeWidth={0.004}
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        </>
+                      )}
+                    </g>
+                  )
+                })}
+
+                {/* Acoustic Measurement Vector Overlay */}
+                {measurePts.length >= 1 && (
+                  <g className="sonar-measure-vector">
+                    <circle
+                      cx={measurePts[0].x}
+                      cy={measurePts[0].y}
+                      r={0.006}
+                      fill="#38bdf8"
+                      stroke="#ffffff"
+                      strokeWidth={0.002}
                       vectorEffect="non-scaling-stroke"
                     />
-
-                    {/* Corner Reinforcements for Selected Box */}
-                    {isSelected && (
+                    {measurePts.length === 2 && (
                       <>
-                        <path
-                          d={`M ${bbox.x + cornerLenX} ${bbox.y} L ${bbox.x} ${bbox.y} L ${bbox.x} ${bbox.y + cornerLenY}`}
-                          fill="none"
-                          stroke="#ffffff"
-                          strokeWidth={0.004}
+                        <line
+                          x1={measurePts[0].x}
+                          y1={measurePts[0].y}
+                          x2={measurePts[1].x}
+                          y2={measurePts[1].y}
+                          stroke="#38bdf8"
+                          strokeWidth={0.003}
+                          strokeDasharray="0.01,0.005"
                           vectorEffect="non-scaling-stroke"
                         />
-                        <path
-                          d={`M ${bbox.x + bbox.w - cornerLenX} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y + cornerLenY}`}
-                          fill="none"
+                        <circle
+                          cx={measurePts[1].x}
+                          cy={measurePts[1].y}
+                          r={0.006}
+                          fill="#38bdf8"
                           stroke="#ffffff"
-                          strokeWidth={0.004}
-                          vectorEffect="non-scaling-stroke"
-                        />
-                        <path
-                          d={`M ${bbox.x} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x} ${bbox.y + bbox.h} L ${bbox.x + cornerLenX} ${bbox.y + bbox.h}`}
-                          fill="none"
-                          stroke="#ffffff"
-                          strokeWidth={0.004}
-                          vectorEffect="non-scaling-stroke"
-                        />
-                        <path
-                          d={`M ${bbox.x + bbox.w} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x + bbox.w} ${bbox.y + bbox.h} L ${bbox.x + bbox.w - cornerLenX} ${bbox.y + bbox.h}`}
-                          fill="none"
-                          stroke="#ffffff"
-                          strokeWidth={0.004}
+                          strokeWidth={0.002}
                           vectorEffect="non-scaling-stroke"
                         />
                       </>
                     )}
                   </g>
+                )}
+              </svg>
+
+              {/* Clean Detection Labels */}
+              {normalizedTargets.map(t => {
+                const { bbox, id } = t
+                const isSelected = id === selectedTargetId
+                const isHovered = id === hoveredTargetId
+                const labelType = t.class || (t.type ? t.type.toUpperCase().replace(/_/g, ' ') : 'ANOMALY')
+                const confText = `${(t.confidence * 100).toFixed(1)}%`
+                const sideText = t.side || (bbox.x < 0.5 ? 'PORT' : 'STBD')
+
+                return (
+                  <div
+                    key={id}
+                    className={`sonar-label-chip ${isSelected ? 'sonar-label-chip--selected' : ''} ${isHovered ? 'sonar-label-chip--hovered' : ''}`}
+                    style={{
+                      left: `${Math.min(92, Math.max(1, bbox.x * 100))}%`,
+                      top: `${Math.min(94, Math.max(1, bbox.y * 100))}%`,
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectTarget?.(id)
+                    }}
+                    onMouseEnter={() => setHoveredTargetId(id)}
+                    onMouseLeave={() => setHoveredTargetId(null)}
+                  >
+                    <div className="sonar-chip-header">
+                      <span className="sonar-chip-dot" />
+                      <span className="sonar-chip-id">{id}</span>
+                      <span className="sonar-chip-type">{labelType}</span>
+                      <span className="sonar-chip-conf">{confText}</span>
+                    </div>
+                    {isSelected && (
+                      <div className="sonar-chip-sub">
+                        <span>{sideText} CH</span>
+                        <span>&bull;</span>
+                        <span>{t.status.toUpperCase()}</span>
+                      </div>
+                    )}
+                  </div>
                 )
               })}
-            </svg>
+            </>
+          )}
+        </div>
 
-            {/* Clean Detection Labels */}
-            {normalizedTargets.map(t => {
-              const { bbox, id } = t
-              const isSelected = id === selectedTargetId
-              const isHovered = id === hoveredTargetId
-              const labelType = t.class || (t.type ? t.type.toUpperCase().replace(/_/g, ' ') : 'ANOMALY')
-              const confText = `${(t.confidence * 100).toFixed(1)}%`
-              const sideText = t.side || (bbox.x < 0.5 ? 'PORT' : 'STBD')
+        {/* Real-time Cursor Telemetry HUD (Range & Ping Index) */}
+        {cursorPos && (
+          <div className="sonar-cursor-hud">
+            <span className="sonar-hud-segment">
+              SWATH: <strong>{cursorPos.channel} {Math.abs(cursorPos.rangeM)}m</strong>
+            </span>
+            <span className="sonar-hud-sep">&bull;</span>
+            <span className="sonar-hud-segment">
+              PIXEL: <strong>{cursorPos.pxX}, {cursorPos.pxY}</strong>
+            </span>
+            <span className="sonar-hud-sep">&bull;</span>
+            <span className="sonar-hud-segment">
+              RANGE: <strong>{cursorPos.rangeM}m FROM NADIR</strong>
+            </span>
+          </div>
+        )}
 
-              return (
-                <div
-                  key={id}
-                  className={`sonar-label-chip ${isSelected ? 'sonar-label-chip--selected' : ''} ${isHovered ? 'sonar-label-chip--hovered' : ''}`}
-                  style={{
-                    left: `${Math.min(92, Math.max(1, bbox.x * 100))}%`,
-                    top: `${Math.min(94, Math.max(1, bbox.y * 100))}%`,
-                  }}
-                  onClick={() => onSelectTarget?.(id)}
-                  onMouseEnter={() => setHoveredTargetId(id)}
-                  onMouseLeave={() => setHoveredTargetId(null)}
-                >
-                  <div className="sonar-chip-header">
-                    <span className="sonar-chip-dot" />
-                    <span className="sonar-chip-id">{id}</span>
-                    <span className="sonar-chip-type">{labelType}</span>
-                    <span className="sonar-chip-conf">{confText}</span>
-                  </div>
-                  {isSelected && (
-                    <div className="sonar-chip-sub">
-                      <span>{sideText} CH</span>
-                      <span>&bull;</span>
-                      <span>{t.status.toUpperCase()}</span>
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </>
+        {/* Live Measurement Result Badge */}
+        {measurementResult && (
+          <div className="sonar-measure-hud">
+            <span className="sonar-measure-title">ACOUSTIC MEASUREMENT</span>
+            <div className="sonar-measure-row">
+              <span>DISTANCE:</span>
+              <strong>{measurementResult.distM} m</strong>
+            </div>
+            <div className="sonar-measure-row">
+              <span>ACROSS-TRACK (ΔR):</span>
+              <strong>{measurementResult.dxM} m</strong>
+            </div>
+            <div className="sonar-measure-row">
+              <span>EST. SHADOW RELIEF (H):</span>
+              <strong>~{measurementResult.estHeightM} m</strong>
+            </div>
+          </div>
         )}
 
         {/* Bottom Status Ribbon */}
         <div className="sonar-bottom-status">
-          ACOUSTIC SIDESCAN CHIRP | SLANT RANGE: 100m PORT / 100m STBD | PROCESSED VIA YOLOV11S
+          ACOUSTIC SIDESCAN CHIRP | SWATH: 100m PORT / 100m STBD | YOLOV11S INFERENCE WORKSTATION
         </div>
       </div>
     </div>
