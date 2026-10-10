@@ -3,7 +3,15 @@
  * Interfaces with FastAPI endpoints conforming to docs/api-contract.md
  */
 
-export const API_BASE_URL = 'http://127.0.0.1:8000'
+export const API_BASE_URL =
+  typeof window !== 'undefined' && window.location?.origin && window.location.origin.startsWith('http')
+    ? ''
+    : 'http://127.0.0.1:8000'
+
+export function getEndpointUrl(path) {
+  if (!API_BASE_URL) return path
+  return `${API_BASE_URL}${path}`
+}
 
 /**
  * Derives the WebSocket URL for streaming job status updates
@@ -11,7 +19,11 @@ export const API_BASE_URL = 'http://127.0.0.1:8000'
  * @returns {string}
  */
 export function getWebSocketUrl(jobId) {
-  const wsBase = API_BASE_URL.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:')
+  if (typeof window !== 'undefined' && window.location?.origin && window.location.origin.startsWith('http')) {
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${wsProto}//${window.location.host}/api/v1/jobs/${jobId}/ws`
+  }
+  const wsBase = (API_BASE_URL || 'http://127.0.0.1:8000').replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:')
   return `${wsBase}/api/v1/jobs/${jobId}/ws`
 }
 
@@ -47,11 +59,21 @@ async function parseError(response) {
  * @returns {Promise<{status: string}>}
  */
 export async function checkHealth(signal) {
-  const response = await fetch(`${API_BASE_URL}/health`, { signal })
-  if (!response.ok) {
-    throw await parseError(response)
+  try {
+    const response = await fetch(getEndpointUrl('/health'), { signal })
+    if (!response.ok) {
+      throw await parseError(response)
+    }
+    return response.json()
+  } catch (err) {
+    if (typeof window !== 'undefined' && window.electronAPI?.checkBackend) {
+      const isAlive = await window.electronAPI.checkBackend().catch(() => false)
+      if (isAlive) {
+        return { status: 'ok' }
+      }
+    }
+    throw err
   }
-  return response.json()
 }
 
 /**
@@ -60,7 +82,7 @@ export async function checkHealth(signal) {
  * @returns {Promise<{model_name: string, model_ready: boolean, model_loaded: boolean, classes: string[]}>}
  */
 export async function getModelStatus(signal) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/model/status`, { signal })
+  const response = await fetch(getEndpointUrl('/api/v1/model/status'), { signal })
   if (!response.ok) {
     throw await parseError(response)
   }
@@ -80,7 +102,7 @@ export async function initiateDetection(file, { signal } = {}) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/detect`, {
+  const response = await fetch(getEndpointUrl('/api/v1/detect'), {
     method: 'POST',
     body: formData,
     signal,
@@ -100,23 +122,13 @@ export async function initiateDetection(file, { signal } = {}) {
  * @returns {Promise<{job_id: string, status: string, detections: Array, error?: any}>}
  */
 export async function getJobStatus(jobId, signal) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${jobId}`, { signal })
+  const response = await fetch(getEndpointUrl(`/api/v1/jobs/${jobId}`), { signal })
   if (!response.ok) {
     throw await parseError(response)
   }
   return response.json()
 }
 
-/**
- * 4. Real-Time Detection with Native WebSocket Push Streaming (Phase 4)
- * Completely eliminates HTTP polling; receives live status events pushed by backend ws_manager.
- * Cleanly closes the WebSocket upon job completion, failure, or user AbortSignal.
- *
- * @param {File} file
- * @param {Object} [options]
- * @param {AbortSignal} [options.signal]
- * @param {(stage: string, meta?: any) => void} [options.onStageChange]
- * @param {(jobId: string) => void} [options.onJobRegistered]
 /**
  * Streams job status and detections via WebSocket until completion
  * @param {string} jobId
@@ -165,9 +177,9 @@ export async function streamJobResult(jobId, { signal, onStageChange } = {}) {
 
     try {
       ws = new WebSocket(wsUrl)
-    } catch (err) {
-      cleanup()
-      reject(err)
+    } catch {
+      // If WebSocket constructor fails, fallback directly to REST polling
+      startPollingFallback()
       return
     }
 
@@ -209,7 +221,7 @@ export async function streamJobResult(jobId, { signal, onStageChange } = {}) {
           reject(err)
           return
         }
-      } catch (parseErr) {
+      } catch {
         // Ignore non-JSON or ping frames
       }
     }
@@ -219,24 +231,57 @@ export async function streamJobResult(jobId, { signal, onStageChange } = {}) {
       console.warn('WebSocket encountered error, preparing fallback check:', event)
     }
 
-    ws.onclose = (event) => {
+    ws.onclose = () => {
       if (isFinished) return
       if (signal?.aborted) return
 
-      isFinished = true
       cleanup()
+      startPollingFallback()
+    }
 
-      getJobStatus(jobId, signal)
-        .then((fallbackData) => {
+    function startPollingFallback() {
+      if (isFinished) return
+      const startTime = Date.now()
+      const poll = async () => {
+        if (isFinished) return
+        if (signal?.aborted) {
+          onAbort()
+          return
+        }
+        try {
+          const fallbackData = await getJobStatus(jobId, signal)
           if (fallbackData.status === 'completed') {
+            isFinished = true
+            cleanup()
             resolve(fallbackData)
-          } else {
-            reject(new Error(`WebSocket connection closed (code: ${event.code}).`))
+            return
           }
-        })
-        .catch(() => {
-          reject(new Error(`WebSocket connection closed (code: ${event.code}).`))
-        })
+          if (fallbackData.status === 'failed') {
+            isFinished = true
+            cleanup()
+            const err = new Error(fallbackData.error?.message || 'Detection job failed on backend.')
+            err.code = fallbackData.error?.code || 'JOB_FAILED'
+            reject(err)
+            return
+          }
+          if (Date.now() - startTime > 30000) {
+            isFinished = true
+            cleanup()
+            reject(new Error(`Timed out waiting for detection job '${jobId}'.`))
+            return
+          }
+          setTimeout(poll, 600)
+        } catch (pollErr) {
+          if (Date.now() - startTime > 15000) {
+            isFinished = true
+            cleanup()
+            reject(pollErr)
+          } else {
+            setTimeout(poll, 800)
+          }
+        }
+      }
+      poll()
     }
   })
 }
@@ -280,7 +325,7 @@ export async function detectFileAsync(
 export async function detectReferenceScanAsync({ signal, onStageChange, onJobRegistered } = {}) {
   onStageChange?.('Requesting YOLOv11s inference on reference sonar scan...')
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/detect/reference`, {
+  const response = await fetch(getEndpointUrl('/api/v1/detect/reference'), {
     method: 'POST',
     signal,
   })
@@ -310,7 +355,7 @@ export async function detectReferenceScanAsync({ signal, onStageChange, onJobReg
  * @returns {Promise<Blob>}
  */
 export async function generateReportApi(format, detections, signal) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/reports/generate`, {
+  const response = await fetch(getEndpointUrl('/api/v1/reports/generate'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -336,7 +381,7 @@ export async function uploadSonarLog(file, signal) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/sonar/upload`, {
+  const response = await fetch(getEndpointUrl('/api/v1/sonar/upload'), {
     method: 'POST',
     body: formData,
     signal,
@@ -355,7 +400,7 @@ export async function uploadSonarLog(file, signal) {
  * @param {AbortSignal} [signal]
  */
 export async function geotagDetection(detection, pingMetadata, signal) {
-  const response = await fetch(`${API_BASE_URL}/api/v1/geotag`, {
+  const response = await fetch(getEndpointUrl('/api/v1/geotag'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ detection, ping_metadata: pingMetadata }),
@@ -367,6 +412,7 @@ export async function geotagDetection(detection, pingMetadata, signal) {
   }
   return response.json()
 }
+
 /**
  * 8. Historical Jobs API: GET /api/v1/jobs (B1)
  * Retrieves paginated list of past detection jobs
@@ -383,7 +429,7 @@ export async function getHistoricalJobs({ skip = 0, limit = 50, status = null } 
     params.set('status', status)
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/jobs?${params.toString()}`, {
+  const response = await fetch(getEndpointUrl(`/api/v1/jobs?${params.toString()}`), {
     method: 'GET',
     headers: { 'Accept': 'application/json' },
     signal,
@@ -406,7 +452,7 @@ export async function renderSonarImageBlob(file, signal) {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch(`${API_BASE_URL}/api/v1/sonar/render-image`, {
+  const response = await fetch(getEndpointUrl('/api/v1/sonar/render-image'), {
     method: 'POST',
     body: formData,
     signal,
@@ -429,7 +475,7 @@ export async function renderSonarImageBlob(file, signal) {
  */
 export async function updateDetectionReview(jobId, detectionId, reviewStatus, notes = null, signal) {
   if (!jobId || !detectionId) return null
-  const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${jobId}/detections/${detectionId}/review`, {
+  const response = await fetch(getEndpointUrl(`/api/v1/jobs/${jobId}/detections/${detectionId}/review`), {
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
