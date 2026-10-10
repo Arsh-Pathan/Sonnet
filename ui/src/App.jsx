@@ -17,6 +17,7 @@ import {
   detectFileAsync,
   detectReferenceScanAsync,
   updateDetectionReview,
+  renderSonarImageBlob,
 } from './api/client'
 import { useWebSocket } from './hooks/useWebSocket'
 import { DEFAULT_SONAR_IMAGE } from './mock/mockData'
@@ -331,18 +332,31 @@ export default function App() {
     setSelectedFile(file)
     setHasUploadedScan(true)
 
-    let localUrl = null
     const isImage = /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(file.name)
     if (isImage) {
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const previewUrl = e.target.result
+        setImageUrl(previewUrl)
+        runInference(previewUrl, file)
+      }
+      reader.onerror = () => {
+        const fallbackUrl = URL.createObjectURL(file)
+        setImageUrl(fallbackUrl)
+        runInference(fallbackUrl, file)
+      }
+      reader.readAsDataURL(file)
+    } else {
       try {
-        localUrl = URL.createObjectURL(file)
-        setImageUrl(localUrl)
-      } catch (e) {
-        console.warn('Could not create object URL for file:', e)
+        const waterfallBlob = await renderSonarImageBlob(file)
+        const waterfallUrl = URL.createObjectURL(waterfallBlob)
+        setImageUrl(waterfallUrl)
+        runInference(waterfallUrl, file)
+      } catch (err) {
+        console.warn('Could not generate waterfall from sonar log, using default scan preview:', err)
+        runInference(DEFAULT_SONAR_IMAGE, file)
       }
     }
-
-    runInference(localUrl || DEFAULT_SONAR_IMAGE, file)
   }, [runInference])
 
   // Reset back to sample reference scan with real model inference

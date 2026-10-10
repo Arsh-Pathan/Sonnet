@@ -100,13 +100,16 @@ export default function SonarView({
     img.onload = () => {
       if (!isMounted) return
       imgRef.current = img
-      setImageDims({ width: img.naturalWidth || 1376, height: img.naturalHeight || 768 })
+      const natW = img.naturalWidth || 1376
+      const natH = img.naturalHeight || 768
+      setImageDims({ width: natW, height: natH })
 
-      const w = canvas.width
-      const h = canvas.height
-      ctx.clearRect(0, 0, w, h)
+      canvas.width = natW
+      canvas.height = natH
+
+      ctx.clearRect(0, 0, natW, natH)
       ctx.filter = getCanvasFilter(displaySettings)
-      ctx.drawImage(img, 0, 0, w, h)
+      ctx.drawImage(img, 0, 0, natW, natH)
       ctx.filter = 'none'
     }
 
