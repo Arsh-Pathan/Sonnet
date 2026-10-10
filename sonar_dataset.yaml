@@ -1,0 +1,10 @@
+path: /kaggle/input/datasets/faaizhussain/marine-sonar-balanced-v1/production_balanced_v1
+train: images/train
+val: images/val
+test: images/test
+names:
+  0: pipeline
+  1: shipwreck
+  2: mine_cylinder
+  3: ghost_net
+  4: crab_pot
