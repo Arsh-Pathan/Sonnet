@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { STATUS_OPTIONS } from '../../mock/mockData'
 import './TargetLog.css'
+
+const REVIEW_OPTIONS = ['Detected', 'Confirmed', 'Pending Review', 'False Positive']
 
 export default function TargetLog({
   targets = [],
@@ -17,14 +18,14 @@ export default function TargetLog({
   const filtered = targets.filter(t => {
     // 1. Search filter
     const matchesSearch = !search ||
-      t.id.toLowerCase().includes(search.toLowerCase()) ||
-      t.class?.toLowerCase().includes(search.toLowerCase()) ||
-      t.type?.toLowerCase().includes(search.toLowerCase())
+      (t.id && t.id.toLowerCase().includes(search.toLowerCase())) ||
+      (t.class && t.class.toLowerCase().includes(search.toLowerCase())) ||
+      (t.type && t.type.toLowerCase().includes(search.toLowerCase()))
 
     // 2. Status filter
     const matchesStatus = statusFilter === 'ALL' ||
       (statusFilter === 'CONFIRMED' && (t.status === 'Operator accepted' || t.status === 'Confirmed')) ||
-      (statusFilter === 'DETECTED' && t.status === 'Detected') ||
+      (statusFilter === 'DETECTED' && (!t.status || t.status === 'Detected')) ||
       (statusFilter === 'REVIEW' && t.status === 'Pending Review') ||
       (statusFilter === 'FALSE_POSITIVE' && t.status === 'False Positive')
 
@@ -41,8 +42,8 @@ export default function TargetLog({
       <div className="tl-header">
         <div className="tl-header__left">
           <span className="tl-indicator" />
-          <span className="tl-title">TARGET DETECTION LOG</span>
-          <span className="tl-count">{filtered.length} of {targets.length} Anomaly Events</span>
+          <span className="tl-title">DETECTION LOG &amp; AUDIT</span>
+          <span className="tl-count">{filtered.length} of {targets.length} Records</span>
         </div>
 
         <div className="tl-header__right">
@@ -62,13 +63,13 @@ export default function TargetLog({
 
           {/* Search Input */}
           <div className="tl-search">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#627b92" strokeWidth="2.2">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#64748b" strokeWidth="2">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
               type="text"
               className="tl-search__input"
-              placeholder="Search ID, class..."
+              placeholder="Filter by ID, class..."
               value={search}
               onChange={e => setSearch(e.target.value)}
             />
@@ -99,21 +100,24 @@ export default function TargetLog({
           <table className="tl-table">
             <thead>
               <tr>
-                <th>TRACK ID</th>
+                <th>DETECTION ID</th>
                 <th>ACOUSTIC RETURN</th>
-                <th>CLASSIFICATION</th>
+                <th>PREDICTED CLASS</th>
                 <th>YOLO CONFIDENCE</th>
-                <th>CHANNEL</th>
-                <th>TIMESTAMP</th>
-                <th>FRAME</th>
-                <th>VERIFICATION STATUS</th>
+                <th>SWATH / CHANNEL</th>
+                <th>BOUNDING BOX (X, Y, W, H)</th>
+                <th>OPERATOR VERIFICATION</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(t => {
                 const isSelected = selectedTargetId === t.id
-                const score = Number(t.confidence ?? t.modelScore ?? 0.85)
+                const score = Number(t.confidence ?? t.modelScore ?? 0.0)
                 const channel = (t.roi || t.side || (t.bbox?.x < 0.5 ? 'port' : 'starboard')).toUpperCase()
+                const bx = t.bbox?.x != null ? (t.bbox.x * 100).toFixed(1) : '—'
+                const by = t.bbox?.y != null ? (t.bbox.y * 100).toFixed(1) : '—'
+                const bw = t.bbox?.w != null ? (t.bbox.w * 100).toFixed(1) : '—'
+                const bh = t.bbox?.h != null ? (t.bbox.h * 100).toFixed(1) : '—'
 
                 return (
                   <tr
@@ -123,7 +127,6 @@ export default function TargetLog({
                   >
                     <td className="tl-cell tl-cell--id">{t.id}</td>
                     <td className="tl-cell">
-                      {/* Authentic Sonar Crop Thumbnail with HUD Reticle */}
                       <div className={`tl-thumb-wrap ${isSelected ? 'tl-thumb-wrap--selected' : ''}`}>
                         <img
                           src={t.thumbnailUrl || '/assets/sonar_shipwreck_scan.jpg'}
@@ -131,32 +134,30 @@ export default function TargetLog({
                           className="tl-thumb-img"
                           loading="lazy"
                         />
-                        <div className="tl-thumb-reticle" />
                       </div>
                     </td>
                     <td className="tl-cell">
-                      <span className="tl-class">{t.class || t.type?.toUpperCase()}</span>
-                      <span className="tl-type-sub">{t.type?.replace('_', ' ')}</span>
+                      <span className="tl-class">{t.class || (t.type && t.type.toUpperCase().replace(/_/g, ' '))}</span>
+                      <span className="tl-type-sub">{t.type ? t.type.replace(/_/g, ' ') : 'acoustic anomaly'}</span>
                     </td>
                     <td className="tl-cell tl-cell--score">
-                      <span className={`tl-score ${score >= 0.6 ? 'tl-score--high' : score >= 0.4 ? 'tl-score--mid' : 'tl-score--low'}`}>
+                      <span className={`tl-score ${score >= 0.7 ? 'tl-score--high' : score >= 0.4 ? 'tl-score--mid' : 'tl-score--low'}`}>
                         {(score * 100).toFixed(1)}% ({score.toFixed(3)})
                       </span>
                     </td>
                     <td className="tl-cell tl-cell--roi">{channel} CH</td>
-                    <td className="tl-cell tl-cell--mono">{t.timeS || '00:14.2'}</td>
-                    <td className="tl-cell tl-cell--mono">{t.frame || 'F-0428'}</td>
+                    <td className="tl-cell tl-cell--mono">{bx}%, {by}%, {bw}% &times; {bh}%</td>
                     <td className="tl-cell">
                       <select
-                        className={`tl-status-select tl-status--${t.status?.replace(/\s+/g, '-').toLowerCase()}`}
-                        value={t.status || 'Detected'}
+                        className={`tl-status-select tl-status--${(t.status || 'detected').replace(/\s+/g, '-').toLowerCase()}`}
+                        value={t.status === 'Operator accepted' ? 'Confirmed' : t.status || 'Detected'}
                         onClick={e => e.stopPropagation()}
                         onChange={e => {
                           e.stopPropagation()
                           onUpdateTargetStatus?.(t.id, e.target.value)
                         }}
                       >
-                        {STATUS_OPTIONS.map(s => (
+                        {REVIEW_OPTIONS.map(s => (
                           <option key={s} value={s}>{s}</option>
                         ))}
                       </select>
@@ -166,9 +167,9 @@ export default function TargetLog({
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan="8" className="tl-empty">
+                  <td colSpan="7" className="tl-empty">
                     {targets.length === 0
-                      ? 'No sonar anomalies detected. Click "RUN DETECTION" to process a file.'
+                      ? 'No detections loaded. Click "UPLOAD & ANALYZE" to process sonar imagery.'
                       : 'No target detections match the active filter criteria.'}
                   </td>
                 </tr>

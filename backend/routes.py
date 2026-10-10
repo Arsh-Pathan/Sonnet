@@ -27,6 +27,7 @@ from backend.schemas import (
     FuseResponse,
     PaginatedHistoryResponse,
     JobHistorySummary,
+    ReviewUpdateRequest,
 )
 from backend.geotagging import GeotaggingEngine, GeotagConfig
 from backend.read_log import PingMetadata
@@ -39,6 +40,18 @@ router = APIRouter(prefix="/api/v1")
 engine = GeotaggingEngine(GeotagConfig())
 
 ALLOWED_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.tiff', '.xtf', '.jsf')
+
+@router.get("/model/status", tags=["Model"])
+def get_model_status():
+    weights_path = yolo_engine.weights_path
+    weights_ok = os.path.exists(weights_path) and os.path.getsize(weights_path) > 1000
+    return {
+        "model_name": "YOLOv11s",
+        "weights_path": weights_path,
+        "model_ready": weights_ok,
+        "model_loaded": yolo_engine.model is not None,
+        "classes": ["pipeline", "shipwreck", "mine_cylinder", "ghost_net", "crab_pot"]
+    }
 
 @router.post("/geotag", tags=["Geotagging"], response_model=GeotaggedDetection)
 def geotag_detection_endpoint(request: GeotagRequest):
@@ -123,6 +136,54 @@ async def detect_anomalies(
         detections=[]
     )
 
+@router.post(
+    "/detect/reference",
+    tags=["Detection"],
+    response_model=DetectResponse,
+    responses={500: {"model": ErrorResponse}}
+)
+async def detect_reference_scan(background_tasks: BackgroundTasks):
+    """
+    Runs YOLOv11s inference on the reference shipwreck sonar scan asset.
+    Creates a real job and streams real detections over WebSocket.
+    """
+    ref_candidates = [
+        os.path.join("ui", "src", "assets", "sonar_shipwreck_scan.jpg"),
+        os.path.join(os.path.dirname(__file__), "..", "ui", "src", "assets", "sonar_shipwreck_scan.jpg"),
+        os.path.join("assets", "sonar_shipwreck_scan.jpg"),
+    ]
+    ref_file = None
+    for p in ref_candidates:
+        if os.path.exists(p):
+            ref_file = os.path.abspath(p)
+            break
+
+    if not ref_file:
+        raise HTTPException(status_code=404, detail="Reference sonar scan asset not found.")
+
+    job_id = await job_manager.create_job()
+    await job_manager.update_job_status(job_id, status="processing")
+
+    async def execute_reference_inference(jid: str, file_path: str):
+        try:
+            detections = await yolo_engine.infer(file_path)
+            await job_manager.update_job_status(jid, status="completed", detections=detections)
+        except Exception as exc:
+            traceback.print_exc()
+            await job_manager.update_job_status(
+                jid,
+                status="failed",
+                error={"code": "INFERENCE_FAILED", "message": str(exc)}
+            )
+
+    background_tasks.add_task(execute_reference_inference, job_id, ref_file)
+
+    return DetectResponse(
+        job_id=job_id,
+        status="processing_async",
+        detections=[]
+    )
+
 @router.get(
     "/jobs/{job_id}",
     tags=["Detection"],
@@ -150,6 +211,35 @@ async def get_job_status(job_id: str):
         detections=[DetectionResult(**d) for d in job.detections] if job.detections else [],
         error=ErrorDetail(**job.error) if job.error else None
     )
+
+@router.patch(
+    "/jobs/{job_id}/detections/{detection_id}/review",
+    tags=["Detection"],
+    responses={404: {"model": ErrorResponse}}
+)
+async def update_detection_review_endpoint(
+    job_id: str,
+    detection_id: str,
+    request: ReviewUpdateRequest
+):
+    """
+    Persists operator verification decision for a specific detection.
+    """
+    updated = await job_manager.update_detection_review(
+        job_id=job_id,
+        detection_id=detection_id,
+        review_status=request.review_status,
+        notes=request.operator_notes
+    )
+    if not updated:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "DETECTION_NOT_FOUND",
+                "message": f"Detection '{detection_id}' in job '{job_id}' not found."
+            }
+        )
+    return {"status": "ok", "detection": updated}
 
 @router.post("/fuse", tags=["Fusion"], response_model=FuseResponse)
 def fuse_detections_endpoint(request: FuseRequest):

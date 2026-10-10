@@ -11,11 +11,58 @@ import UploadDropzone from './components/UploadDropzone'
 import ProcessingStatus from './components/ProcessingStatus'
 import ErrorBoundary from './components/ErrorBoundary'
 import ErrorBanner from './components/ErrorBanner'
-import { checkHealth, detectFileAsync } from './api/client'
-import { useWebSocket } from './hooks/useWebSocket'
 import {
-  MOCK_NAVIGATION, MOCK_TARGETS, DEFAULT_SONAR_IMAGE,
-} from './mock/mockData'
+  checkHealth,
+  getModelStatus,
+  detectFileAsync,
+  detectReferenceScanAsync,
+  updateDetectionReview,
+} from './api/client'
+import { useWebSocket } from './hooks/useWebSocket'
+import { DEFAULT_SONAR_IMAGE } from './mock/mockData'
+
+/**
+ * Normalizes raw inference results from YOLOv11s backend into typed application detections
+ */
+function normalizeDetections(rawDetections, defaultImage) {
+  if (!rawDetections || !Array.isArray(rawDetections)) return []
+  return rawDetections.map((d, i) => {
+    const detId = d.detection_id || `det_${String(i + 1).padStart(3, '0')}`
+    const className = d.class_name || d.type || 'anomaly'
+    const prettyClass = className.replace(/_/g, ' ').toUpperCase()
+    const conf = Number(d.confidence != null ? d.confidence : d.modelScore ?? 0.0)
+
+    let bboxNorm = { x: 0.2, y: 0.2, w: 0.08, h: 0.12 }
+    if (d.bbox) {
+      const xmin = d.bbox.x_min ?? d.bbox.x ?? 0.2
+      const ymin = d.bbox.y_min ?? d.bbox.y ?? 0.2
+      const xmax = d.bbox.x_max != null ? d.bbox.x_max : xmin + (d.bbox.w ?? 0.08)
+      const ymax = d.bbox.y_max != null ? d.bbox.y_max : ymin + (d.bbox.h ?? 0.12)
+      bboxNorm = {
+        x: Math.max(0, Math.min(1, xmin)),
+        y: Math.max(0, Math.min(1, ymin)),
+        w: Math.max(0.01, Math.min(1, xmax - xmin)),
+        h: Math.max(0.01, Math.min(1, ymax - ymin)),
+      }
+    }
+
+    const channel = d.geotag?.channel || (bboxNorm.x < 0.5 ? 'port' : 'starboard')
+
+    return {
+      id: detId,
+      type: className,
+      class: prettyClass,
+      confidence: conf,
+      modelScore: conf,
+      roi: channel,
+      side: channel,
+      status: d.review_status || d.status || 'Detected',
+      bbox: bboxNorm,
+      geotag: d.geotag || null,
+      thumbnailUrl: d.thumbnailUrl || defaultImage,
+    }
+  })
+}
 
 export default function App() {
   // ── Navigation tabs ────────────────────────────────────────────
@@ -31,9 +78,12 @@ export default function App() {
   const [imageUrl, setImageUrl] = useState(DEFAULT_SONAR_IMAGE)
   const [isProcessing, setIsProcessing] = useState(false)
   const [stageMessage, setStageMessage] = useState('')
+  const [hasUploadedScan, setHasUploadedScan] = useState(false)
+  const [hasInitializedScan, setHasInitializedScan] = useState(false)
 
-  // ── Backend health ─────────────────────────────────────────────
+  // ── Backend health & model status ───────────────────────────────
   const [backendStatus, setBackendStatus] = useState('checking')
+  const [modelReady, setModelReady] = useState(false)
   const [apiError, setApiError] = useState(null)
 
   // ── Display settings (applied dynamically on canvas) ──────────
@@ -47,67 +97,179 @@ export default function App() {
   const [minConfidence, setMinConfidence] = useState(0.20)
   const [selectedClasses, setSelectedClasses] = useState([])
 
-  // ── Navigation telemetry ───────────────────────────────────────
-  const [navData, setNavData] = useState(MOCK_NAVIGATION)
-  const [dgpsFix, setDgpsFix] = useState(true)
+  // ── Navigation telemetry (starts honest null for static imagery) ─
+  const [navData, setNavData] = useState(null)
+  const [dgpsFix, setDgpsFix] = useState(false)
 
-  // ── Targets / detections ───────────────────────────────────────
-  const [targets, setTargets] = useState(MOCK_TARGETS)
-  const [selectedTargetId, setSelectedTargetId] = useState('TRK-001')
+  // ── Targets / detections (starts empty until real inference runs) 
+  const [targets, setTargets] = useState([])
+  const [selectedTargetId, setSelectedTargetId] = useState(null)
   const [activeJobId, setActiveJobId] = useState(null)
 
-  // ── WebSocket for active job telemetry & detections ────────────
+  // ── Crop acoustic region around detected bounding box ───────────
+  const generateDetectionCrops = useCallback(async (rawDetections, imageSrc) => {
+    if (!imageSrc || !rawDetections?.length || typeof document === 'undefined') return rawDetections
+
+    return new Promise((resolve) => {
+      const img = new Image()
+      if (!imageSrc.startsWith('blob:') && !imageSrc.startsWith('data:')) {
+        img.crossOrigin = 'anonymous'
+      }
+      img.onload = () => {
+        const iw = img.naturalWidth || img.width
+        const ih = img.naturalHeight || img.height
+
+        const enriched = rawDetections.map((d) => {
+          try {
+            const bbox = d.bbox || {}
+            const xmin = bbox.x ?? 0.2
+            const ymin = bbox.y ?? 0.2
+            const wFrac = bbox.w ?? 0.08
+            const hFrac = bbox.h ?? 0.12
+
+            const x = Math.max(0, xmin * iw)
+            const y = Math.max(0, ymin * ih)
+            const w = Math.max(10, wFrac * iw)
+            const h = Math.max(10, hFrac * ih)
+
+            const padX = w * 0.25
+            const padY = h * 0.25
+            const sx = Math.max(0, x - padX)
+            const sy = Math.max(0, y - padY)
+            const sw = Math.min(iw - sx, w + padX * 2)
+            const sh = Math.min(ih - sy, h + padY * 2)
+
+            const canvas = document.createElement('canvas')
+            canvas.width = 180
+            canvas.height = 130
+            const ctx = canvas.getContext('2d')
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+            return {
+              ...d,
+              thumbnailUrl: canvas.toDataURL('image/jpeg', 0.85),
+            }
+          } catch {
+            return d
+          }
+        })
+        resolve(enriched)
+      }
+      img.onerror = () => resolve(rawDetections)
+      img.src = imageSrc
+    })
+  }, [])
+
+  // ── WebSocket for active job status & live updates ─────────────
   useWebSocket(activeJobId, {
-    onMessage: (msg) => {
+    onMessage: async (msg) => {
       if (msg.status === 'completed' && msg.detections?.length) {
-        const liveTargets = msg.detections.map((d, i) => ({
-          id: d.detection_id || `TRK-${String(i + 1).padStart(3, '0')}`,
-          type: d.class_name || 'sonar',
-          class: d.class_name ? d.class_name.replace('_', ' ').toUpperCase() : 'Sonar Target',
-          modelScore: d.confidence || 0.85,
-          confidence: d.confidence || 0.85,
-          roi: d.geotag?.channel || (i % 2 === 0 ? 'port' : 'starboard'),
-          side: d.geotag?.channel || (i % 2 === 0 ? 'port' : 'starboard'),
-          timeS: new Date().toISOString().slice(14, 19),
-          frame: `F-${1000 + i * 45}`,
-          status: 'Detected',
-          bbox: d.bbox ? {
-            x: d.bbox.x_min ?? d.bbox.x,
-            y: d.bbox.y_min ?? d.bbox.y,
-            w: (d.bbox.x_max != null ? d.bbox.x_max - d.bbox.x_min : d.bbox.w) || 0.05,
-            h: (d.bbox.y_max != null ? d.bbox.y_max - d.bbox.y_min : d.bbox.h) || 0.15,
-          } : { x: 0.3, y: 0.3, w: 0.04, h: 0.15 },
-          geotag: d.geotag,
-          thumbnailUrl: imageUrl || DEFAULT_SONAR_IMAGE,
-        }))
-        setTargets(liveTargets)
-        if (liveTargets[0]) setSelectedTargetId(liveTargets[0].id)
+        const mapped = normalizeDetections(msg.detections, imageUrl || DEFAULT_SONAR_IMAGE)
+        const enriched = await generateDetectionCrops(mapped, imageUrl || DEFAULT_SONAR_IMAGE)
+        setTargets(enriched)
+        if (enriched[0]) setSelectedTargetId(enriched[0].id)
       }
     },
-    onNav: (nav) => { setNavData(nav); setDgpsFix(!!nav.dgpsFix) },
+    onNav: (nav) => {
+      if (nav && (nav.latitude != null || nav.depth != null)) {
+        setNavData(nav)
+        setDgpsFix(!!nav.dgpsFix)
+      }
+    },
     onStage: (stage) => setStageMessage(stage),
   })
 
-  // ── Backend health probe (fast startup polling) ────────────────
+  // ── Run real YOLO inference pipeline on an image or file ─────────
+  const runInference = useCallback(async (imageSrc, fileObj = null) => {
+    setIsProcessing(true)
+    setStageMessage(fileObj ? 'Uploading sonar scan to YOLOv11s inference pipeline...' : 'Analyzing reference sonar scan with YOLOv11s...')
+    setApiError(null)
+
+    try {
+      let result
+      if (fileObj) {
+        result = await detectFileAsync(fileObj, {
+          onStageChange: (stage) => setStageMessage(stage),
+          onJobRegistered: (jobId) => setActiveJobId(jobId),
+        })
+      } else {
+        result = await detectReferenceScanAsync({
+          onStageChange: (stage) => setStageMessage(stage),
+          onJobRegistered: (jobId) => setActiveJobId(jobId),
+        })
+      }
+
+      if (result?.detections && result.detections.length > 0) {
+        const mapped = normalizeDetections(result.detections, imageSrc)
+        const enriched = await generateDetectionCrops(mapped, imageSrc)
+        setTargets(enriched)
+        if (enriched[0]) setSelectedTargetId(enriched[0].id)
+      } else {
+        setTargets([])
+        setSelectedTargetId(null)
+      }
+      setIsUploadOpen(false)
+    } catch (err) {
+      console.error('Inference error:', err)
+      setApiError({
+        code: err.code || 'API_ERROR',
+        message: err.message === 'Failed to fetch'
+          ? 'Cannot connect to backend server at http://127.0.0.1:8000. Ensure the backend is running.'
+          : err.message || 'Detection failed.',
+        details: err.details,
+      })
+    } finally {
+      setIsProcessing(false)
+    }
+  }, [generateDetectionCrops])
+
+  // ── Backend health & model probe (fast startup polling) ────────
   useEffect(() => {
     let mounted = true
     async function probe() {
       try {
-        const res = await checkHealth()
-        if (mounted) setBackendStatus(res.status === 'ok' ? 'online' : 'degraded')
+        const health = await checkHealth()
+        if (mounted) {
+          setBackendStatus(health.status === 'ok' ? 'online' : 'degraded')
+          setApiError((prev) => (prev?.code === 'API_ERROR' ? null : prev))
+        }
+        try {
+          const mStatus = await getModelStatus()
+          if (mounted) setModelReady(!!mStatus.model_ready)
+        } catch {
+          if (mounted) setModelReady(false)
+        }
       } catch {
-        if (mounted) setBackendStatus('offline')
+        if (mounted) {
+          if (window.electronAPI?.checkBackend) {
+            const isAlive = await window.electronAPI.checkBackend().catch(() => false)
+            if (isAlive) {
+              setBackendStatus('online')
+              setApiError((prev) => (prev?.code === 'API_ERROR' ? null : prev))
+              return
+            }
+          }
+          setBackendStatus('offline')
+          setModelReady(false)
+        }
       }
     }
     probe()
-    const t = setInterval(probe, 3000)
+    const t = setInterval(probe, 2500)
     return () => { mounted = false; clearInterval(t) }
   }, [])
+
+  // ── Auto-run real YOLO inference on default scan on boot ────────
+  useEffect(() => {
+    if (backendStatus === 'online' && !hasInitializedScan && !hasUploadedScan) {
+      setHasInitializedScan(true)
+      runInference(DEFAULT_SONAR_IMAGE, null)
+    }
+  }, [backendStatus, hasInitializedScan, hasUploadedScan, runInference])
 
   // ── Filtered targets based on confidence & class ────────────────
   const filteredTargets = useMemo(() => {
     return targets.filter(t => {
-      const score = t.confidence ?? t.modelScore ?? 0.85
+      const score = t.confidence ?? t.modelScore ?? 0.0
       if (score < minConfidence) return false
       if (selectedClasses.length > 0 && !selectedClasses.includes(t.type)) return false
       return true
@@ -136,93 +298,31 @@ export default function App() {
     })
   }, [])
 
-  const handleUpdateTargetStatus = useCallback((targetId, newStatus) => {
+  // Real persistence of operator verification decisions to backend SQLite
+  const handleUpdateTargetStatus = useCallback(async (targetId, newStatus) => {
     setTargets(prev => prev.map(t => (t.id === targetId ? { ...t, status: newStatus } : t)))
-  }, [])
 
-  const handleAddTarget = useCallback((t) => setTargets(prev => [t, ...prev]), [])
+    if (activeJobId) {
+      try {
+        await updateDetectionReview(activeJobId, targetId, newStatus)
+      } catch (err) {
+        console.warn('Could not persist operator review to database:', err)
+      }
+    }
+  }, [activeJobId])
 
   const handleHistoryJob = useCallback((jobData) => {
     if (!jobData) return
     setActiveJobId(jobData.job_id)
     if (jobData.detections?.length) {
-      setTargets(jobData.detections.map((d, i) => ({
-        id: d.detection_id || `TRK-${i + 1}`,
-        type: d.class_name || 'sonar',
-        class: d.class_name ? d.class_name.replace('_', ' ').toUpperCase() : 'Sonar target',
-        modelScore: d.confidence || 0.85,
-        confidence: d.confidence || 0.85,
-        roi: d.geotag?.channel || 'port',
-        side: d.geotag?.channel || 'port',
-        timeS: '00:15.0',
-        frame: `F-${1000 + i * 20}`,
-        status: 'Detected',
-        bbox: d.bbox ? {
-          x: d.bbox.x_min ?? d.bbox.x,
-          y: d.bbox.y_min ?? d.bbox.y,
-          w: (d.bbox.x_max != null ? d.bbox.x_max - d.bbox.x_min : d.bbox.w) || 0.05,
-          h: (d.bbox.y_max != null ? d.bbox.y_max - d.bbox.y_min : d.bbox.h) || 0.15,
-        } : { x: 0.3, y: 0.3, w: 0.04, h: 0.15 },
-        geotag: d.geotag,
-        thumbnailUrl: DEFAULT_SONAR_IMAGE,
-      })))
+      const mapped = normalizeDetections(jobData.detections, DEFAULT_SONAR_IMAGE)
+      setTargets(mapped)
+      if (mapped[0]) setSelectedTargetId(mapped[0].id)
+    } else {
+      setTargets([])
+      setSelectedTargetId(null)
     }
     setIsHistoryOpen(false)
-  }, [])
-
-  const [hasUploadedScan, setHasUploadedScan] = useState(false)
-
-  // Crop acoustic region around detected bounding box for high-resolution target inspector
-  const generateDetectionCrops = useCallback(async (rawDetections, imageSrc) => {
-    if (!imageSrc || !rawDetections?.length || typeof document === 'undefined') return rawDetections
-
-    return new Promise((resolve) => {
-      const img = new Image()
-      if (!imageSrc.startsWith('blob:') && !imageSrc.startsWith('data:')) {
-        img.crossOrigin = 'anonymous'
-      }
-      img.onload = () => {
-        const iw = img.naturalWidth || img.width
-        const ih = img.naturalHeight || img.height
-
-        const enriched = rawDetections.map((d) => {
-          try {
-            const bbox = d.bbox || {}
-            const xmin = bbox.x ?? bbox.x_min ?? 0.2
-            const ymin = bbox.y ?? bbox.y_min ?? 0.2
-            const wFrac = bbox.w ?? (bbox.x_max != null ? bbox.x_max - bbox.x_min : 0.05)
-            const hFrac = bbox.h ?? (bbox.y_max != null ? bbox.y_max - bbox.y_min : 0.1)
-
-            const x = Math.max(0, xmin * iw)
-            const y = Math.max(0, ymin * ih)
-            const w = Math.max(10, wFrac * iw)
-            const h = Math.max(10, hFrac * ih)
-
-            const padX = w * 0.25
-            const padY = h * 0.25
-            const sx = Math.max(0, x - padX)
-            const sy = Math.max(0, y - padY)
-            const sw = Math.min(iw - sx, w + padX * 2)
-            const sh = Math.min(ih - sy, h + padY * 2)
-
-            const canvas = document.createElement('canvas')
-            canvas.width = 180
-            canvas.height = 140
-            const ctx = canvas.getContext('2d')
-            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-            return {
-              ...d,
-              thumbnailUrl: canvas.toDataURL('image/jpeg', 0.85),
-            }
-          } catch {
-            return d
-          }
-        })
-        resolve(enriched)
-      }
-      img.onerror = () => resolve(rawDetections)
-      img.src = imageSrc
-    })
   }, [])
 
   // Process user uploaded file: load image and run YOLO detection pipeline
@@ -230,7 +330,6 @@ export default function App() {
     if (!file) return
     setSelectedFile(file)
     setHasUploadedScan(true)
-    setApiError(null)
 
     let localUrl = null
     const isImage = /\.(png|jpe?g|webp|bmp|tiff?)$/i.test(file.name)
@@ -243,71 +342,16 @@ export default function App() {
       }
     }
 
-    setIsProcessing(true)
-    setStageMessage('Uploading scan to YOLOv11s inference pipeline...')
-    try {
-      const result = await detectFileAsync(file, {
-        onStageChange: (stage) => setStageMessage(stage),
-        onJobRegistered: (jobId) => setActiveJobId(jobId),
-      })
+    runInference(localUrl || DEFAULT_SONAR_IMAGE, file)
+  }, [runInference])
 
-      if (result?.detections && result.detections.length > 0) {
-        const mapped = result.detections.map((d, i) => ({
-          id: d.detection_id || `TRK-${String(i + 1).padStart(3, '0')}`,
-          type: d.class_name || 'sonar',
-          class: d.class_name ? d.class_name.replace(/_/g, ' ').toUpperCase() : 'Sonar Target',
-          modelScore: d.confidence || 0.85,
-          confidence: d.confidence || 0.85,
-          roi: d.geotag?.channel || (i % 2 === 0 ? 'port' : 'starboard'),
-          side: d.geotag?.channel || (i % 2 === 0 ? 'port' : 'starboard'),
-          timeS: new Date().toISOString().slice(14, 19),
-          frame: `F-${800 + i * 50}`,
-          status: 'Detected',
-          bbox: d.bbox ? {
-            x: d.bbox.x_min ?? d.bbox.x,
-            y: d.bbox.y_min ?? d.bbox.y,
-            w: (d.bbox.x_max != null ? d.bbox.x_max - d.bbox.x_min : d.bbox.w) || 0.04,
-            h: (d.bbox.y_max != null ? d.bbox.y_max - d.bbox.y_min : d.bbox.h) || 0.15,
-          } : { x: 0.3, y: 0.3, w: 0.04, h: 0.15 },
-          geotag: d.geotag,
-          thumbnailUrl: localUrl || DEFAULT_SONAR_IMAGE,
-        }))
-
-        const enriched = await generateDetectionCrops(mapped, localUrl || DEFAULT_SONAR_IMAGE)
-        setTargets(enriched)
-        if (enriched[0]) setSelectedTargetId(enriched[0].id)
-      } else {
-        // Clear targets if model returns 0 detections on user image
-        setTargets([])
-        setSelectedTargetId(null)
-      }
-      setIsUploadOpen(false)
-    } catch (err) {
-      const friendlyErr = {
-        code: err.code || 'API_ERROR',
-        message: err.message === 'Failed to fetch'
-          ? 'Cannot connect to backend server at http://127.0.0.1:8000. Ensure the backend is running.'
-          : err.message || 'Detection failed.',
-        details: err.details,
-      }
-      setApiError(friendlyErr)
-    } finally {
-      setIsProcessing(false)
-    }
-  }, [generateDetectionCrops])
-
-  const handleStartDetection = () => {
-    if (selectedFile) handleFileSelected(selectedFile)
-  }
-
-  // Reset back to sample demo scan
+  // Reset back to sample reference scan with real model inference
   const handleResetDemo = useCallback(() => {
     setSelectedFile(null)
     setHasUploadedScan(false)
     setImageUrl(DEFAULT_SONAR_IMAGE)
-    setTargets(MOCK_TARGETS)
-    if (MOCK_TARGETS[0]) setSelectedTargetId(MOCK_TARGETS[0].id)
-  }, [])
+    runInference(DEFAULT_SONAR_IMAGE, null)
+  }, [runInference])
 
   const isConnected = backendStatus === 'online'
 
@@ -319,6 +363,8 @@ export default function App() {
           activeTab={activeTab}
           onTabChange={setActiveTab}
           isConnected={isConnected}
+          modelReady={modelReady}
+          isProcessing={isProcessing}
           onOpenUpload={() => setIsUploadOpen(true)}
           onFileSelected={handleFileSelected}
           onOpenExport={() => setIsExportOpen(true)}
@@ -347,12 +393,11 @@ export default function App() {
               dgpsFix={dgpsFix}
             />
 
-            {/* Center: Sonar Waterfall (Dominant display) */}
+            {/* Center: Sonar Display (Dominant workspace) */}
             <SonarView
               targets={filteredTargets}
               selectedTargetId={selectedTargetId}
               onSelectTarget={setSelectedTargetId}
-              onAddTarget={handleAddTarget}
               displaySettings={displaySettings}
               imageUrl={imageUrl}
               onFileSelected={handleFileSelected}
@@ -360,6 +405,7 @@ export default function App() {
               isProcessing={isProcessing}
               stageMessage={stageMessage}
               hasUploadedScan={hasUploadedScan}
+              sourceFileName={selectedFile?.name}
             />
 
             {/* Right: Anomaly Details & Verification */}
@@ -423,7 +469,9 @@ export default function App() {
                   onFileSelected={handleFileSelected}
                   selectedFile={selectedFile}
                   isProcessing={isProcessing}
-                  onStartDetection={handleStartDetection}
+                  onStartDetection={() => {
+                    if (selectedFile) handleFileSelected(selectedFile)
+                  }}
                 />
                 {isProcessing && (
                   <ProcessingStatus

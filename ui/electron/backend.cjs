@@ -1,9 +1,42 @@
-const { spawn } = require('node:child_process')
+const { spawn, spawnSync } = require('node:child_process')
 const http = require('node:http')
 const net = require('node:net')
 const path = require('node:path')
 
 let backendProcess = null
+
+/**
+ * Finds the best working Python executable with uvicorn available
+ */
+function findPythonExecutable() {
+  if (process.env.PYTHON_PATH) return process.env.PYTHON_PATH
+
+  const candidates = [
+    'python',
+    'py',
+    'python3',
+    'C:\\Users\\ArshPathan\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe',
+    'C:\\Program Files\\PyManager\\python.exe',
+    'C:\\Users\\ArshPathan\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
+    'C:\\Users\\ArshPathan\\AppData\\Local\\Programs\\Python\\Python314\\python.exe',
+  ]
+
+  for (const c of candidates) {
+    try {
+      const res = spawnSync(c, ['-c', 'import uvicorn, fastapi; print("ready")'], {
+        windowsHide: true,
+        timeout: 3000,
+      })
+      if (res.status === 0 && res.stdout && res.stdout.toString().includes('ready')) {
+        return c
+      }
+    } catch {
+      // Continue to next candidate
+    }
+  }
+
+  return 'python'
+}
 
 /**
  * Checks if a TCP port is currently bound by any process
@@ -28,14 +61,28 @@ function isPortBound(port = 8000, host = '127.0.0.1') {
 }
 
 /**
- * Probes the /health endpoint of the FastAPI backend
+ * Probes the FastAPI backend: checks model/status first to ensure current route registry, fallback to /health
  */
 function checkBackend(timeoutMs = 1500) {
   return new Promise((resolve) => {
-    const req = http.get('http://127.0.0.1:8000/health', { timeout: timeoutMs }, (res) => {
-      resolve(res.statusCode === 200)
+    const req = http.get('http://127.0.0.1:8000/api/v1/model/status', { timeout: timeoutMs }, (res) => {
+      if (res.statusCode === 200) {
+        resolve(true)
+      } else {
+        // If 404 or other error, server is running but outdated or incompatible
+        resolve(false)
+      }
     })
-    req.on('error', () => resolve(false))
+    req.on('error', () => {
+      const fallbackReq = http.get('http://127.0.0.1:8000/health', { timeout: timeoutMs }, (fbRes) => {
+        resolve(fbRes.statusCode === 200)
+      })
+      fallbackReq.on('error', () => resolve(false))
+      fallbackReq.on('timeout', () => {
+        fallbackReq.destroy()
+        resolve(false)
+      })
+    })
     req.on('timeout', () => {
       req.destroy()
       resolve(false)
@@ -69,7 +116,7 @@ function killPortProcess(port = 8000) {
       for (const pid of pidsToKill) {
         console.log(`[Backend] Clearing unresponsive process on port ${port} (PID: ${pid})`)
         try {
-          spawn('taskkill', ['/pid', pid, '/f', '/t'], { stdio: 'ignore' })
+          spawnSync('taskkill', ['/pid', pid, '/f', '/t'], { windowsHide: true })
         } catch {
           // ignore
         }
@@ -85,7 +132,7 @@ function killPortProcess(port = 8000) {
  */
 async function startBackend() {
   // 1. If backend is already running and responding, reuse it immediately
-  const isHealthy = await checkBackend(800)
+  const isHealthy = await checkBackend(1000)
   if (isHealthy) {
     console.log('[Backend] FastAPI server is already healthy on http://127.0.0.1:8000')
     return true
@@ -110,9 +157,10 @@ async function startBackend() {
 
   // 3. Spawn fresh FastAPI backend
   const rootDir = path.resolve(__dirname, '../..')
-  console.log(`[Backend] Launching FastAPI Uvicorn backend from: ${rootDir}`)
+  const pythonCmd = findPythonExecutable()
+  console.log(`[Backend] Launching FastAPI backend using: ${pythonCmd}`)
+  console.log(`[Backend] Working directory: ${rootDir}`)
 
-  const pythonCmd = process.env.PYTHON_PATH || 'python'
   const args = ['-m', 'uvicorn', 'backend.main:app', '--host', '127.0.0.1', '--port', '8000']
 
   try {
@@ -120,7 +168,7 @@ async function startBackend() {
       cwd: rootDir,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PYTHONUNBUFFERED: '1' },
-      shell: process.platform === 'win32',
+      windowsHide: true,
     })
 
     backendProcess.stdout?.on('data', (data) => {
@@ -172,7 +220,7 @@ function stopBackend() {
 
     if (process.platform === 'win32') {
       try {
-        spawn('taskkill', ['/pid', String(pid), '/f', '/t'], { stdio: 'ignore' })
+        spawnSync('taskkill', ['/pid', String(pid), '/f', '/t'], { windowsHide: true })
       } catch {
         // ignore
       }

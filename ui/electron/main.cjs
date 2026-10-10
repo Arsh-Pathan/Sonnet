@@ -1,7 +1,7 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
-const { startBackend, stopBackend } = require('./backend.cjs')
+const { startBackend, stopBackend, checkBackend } = require('./backend.cjs')
 
 const isDev = process.argv.includes('--dev')
 const DEV_PORT = process.env.PORT || process.env.VITE_PORT || 5173
@@ -10,16 +10,17 @@ const DIST_INDEX = path.resolve(__dirname, '../dist/index.html')
 
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 800,
-    minHeight: 600,
-    title: 'Team Synora',
+    width: 1280,
+    height: 840,
+    minWidth: 900,
+    minHeight: 650,
+    title: 'SONNET - Sonar Target Detection',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      sandbox: false,
+      webSecurity: false,
     },
   })
 
@@ -48,15 +49,33 @@ function createWindow() {
   }
 }
 
+// IPC Handlers for frontend
+ipcMain.handle('check-backend', async () => {
+  return await checkBackend(1200)
+})
+
+ipcMain.handle('restart-backend', async () => {
+  stopBackend()
+  return await startBackend()
+})
+
 app.whenReady().then(async () => {
-  // Automatically start FastAPI Python backend so it's always online
-  startBackend().catch((err) => console.error('[Electron] Backend startup warning:', err))
+  console.log('[Electron] Initializing integrated FastAPI backend...')
+  try {
+    await startBackend()
+  } catch (err) {
+    console.error('[Electron] Backend startup error:', err)
+  }
 
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  stopBackend()
 })
 
 app.on('will-quit', () => {
@@ -68,3 +87,16 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+process.on('SIGINT', () => {
+  stopBackend()
+  process.exit(0)
+})
+
+process.on('SIGTERM', () => {
+  stopBackend()
+  process.exit(0)
+})
+
+process.on('exit', () => {
+  stopBackend()
+})

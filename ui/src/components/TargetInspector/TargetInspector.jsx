@@ -6,7 +6,6 @@ export default function TargetInspector({
   selectedTarget,
   targets = [],
   onUpdateTargetStatus,
-  onUpdateTargetClass,
   onOpenExport,
   onOpenUpload,
   onFileSelected,
@@ -22,14 +21,14 @@ export default function TargetInspector({
     return (
       <aside className="target-inspector">
         <div className="ti-header">
-          <span className="ti-title">SURVEY OVERVIEW</span>
-          <span className="ti-badge">{targets.length} CONTACTS</span>
+          <span className="ti-title">INSPECTION SUMMARY</span>
+          <span className="ti-badge">{targets.length} DETECTIONS</span>
         </div>
 
         <div className="ti-body">
           <div className="ti-stats-grid">
             <div className="ti-stat-card">
-              <span className="ti-stat-val ti-stat-val--cyan">{targets.length}</span>
+              <span className="ti-stat-val ti-stat-val--blue">{targets.length}</span>
               <span className="ti-stat-lbl">Total Detections</span>
             </div>
             <div className="ti-stat-card">
@@ -71,7 +70,7 @@ export default function TargetInspector({
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
-              Upload Sonar Image / Scan
+              Upload Sonar File
             </button>
             <button
               type="button"
@@ -88,17 +87,24 @@ export default function TargetInspector({
           </div>
 
           <div className="ti-instructions">
-            <span className="ti-instruction-title">OPERATOR GUIDANCE</span>
-            <p>Select any target on the waterfall or from the bottom table to inspect acoustic signatures, verify classifications, and confirm coordinates.</p>
+            <span className="ti-instruction-title">OPERATOR WORKSPACE</span>
+            <p>Select any detection on the acoustic workspace or bottom detection log to inspect acoustic signatures, review YOLO model scores, and confirm classifications.</p>
           </div>
         </div>
       </aside>
     )
   }
 
-  const scorePct = Math.round((selectedTarget.confidence ?? selectedTarget.modelScore ?? 0.85) * 100)
+  const scorePct = Math.round((selectedTarget.confidence ?? selectedTarget.modelScore ?? 0.0) * 100)
   const meta = CLASS_META[selectedTarget.type] || { label: selectedTarget.type || 'Anomaly', color: '#f59e0b' }
   const channel = (selectedTarget.roi || selectedTarget.side || (selectedTarget.bbox?.x < 0.5 ? 'port' : 'starboard')).toUpperCase()
+  const hasGeotag = selectedTarget.geotag && selectedTarget.geotag.latitude != null
+
+  const bbox = selectedTarget.bbox || {}
+  const bx = bbox.x != null ? (bbox.x * 100).toFixed(1) : '—'
+  const by = bbox.y != null ? (bbox.y * 100).toFixed(1) : '—'
+  const bw = bbox.w != null ? (bbox.w * 100).toFixed(1) : '—'
+  const bh = bbox.h != null ? (bbox.h * 100).toFixed(1) : '—'
 
   return (
     <aside className="target-inspector">
@@ -107,8 +113,8 @@ export default function TargetInspector({
           <span className="ti-status-dot" style={{ background: meta.color }} />
           <span className="ti-title">{selectedTarget.id}</span>
         </div>
-        <span className={`ti-badge ti-badge--${selectedTarget.status?.replace(/\s+/g, '-').toLowerCase()}`}>
-          {selectedTarget.status?.toUpperCase() || 'DETECTED'}
+        <span className={`ti-badge ti-badge--${(selectedTarget.status || 'detected').replace(/\s+/g, '-').toLowerCase()}`}>
+          {(selectedTarget.status || 'DETECTED').toUpperCase()}
         </span>
       </div>
 
@@ -120,16 +126,15 @@ export default function TargetInspector({
             alt={selectedTarget.id}
             className="ti-viewport-img"
           />
-          <div className="ti-viewport-reticle" />
           <div className="ti-viewport-tag">{channel} CH</div>
         </div>
 
         {/* AI Confidence & Classification */}
         <div className="ti-card">
           <div className="ti-card-row">
-            <span className="ti-label">YOLO CLASSIFICATION</span>
-            <span className="ti-val" style={{ color: meta.color }}>
-              {selectedTarget.class || meta.label || selectedTarget.type?.toUpperCase()}
+            <span className="ti-label">PREDICTED CLASS</span>
+            <span className="ti-val ti-val--strong" style={{ color: meta.color }}>
+              {selectedTarget.class || meta.label || (selectedTarget.type && selectedTarget.type.toUpperCase().replace(/_/g, ' '))}
             </span>
           </div>
           <div className="ti-conf-bar-wrap">
@@ -138,55 +143,84 @@ export default function TargetInspector({
                 className="ti-conf-fill"
                 style={{
                   width: `${scorePct}%`,
-                  background: scorePct >= 75 ? '#22c55e' : scorePct >= 50 ? '#facc15' : '#ef4444',
+                  background: scorePct >= 70 ? '#22c55e' : scorePct >= 40 ? '#facc15' : '#ef4444',
                 }}
               />
             </div>
-            <span className="ti-conf-pct">{scorePct}% MATCH</span>
+            <span className="ti-conf-pct">{scorePct}% CONFIDENCE</span>
           </div>
         </div>
 
-        {/* Geotag & Hydrographic Telemetry */}
+        {/* Spatial Coordinates & Bounding Box */}
         <div className="ti-card">
+          <div className="ti-card-header-sm">DETECTION GEOMETRY</div>
           <div className="ti-card-row">
-            <span className="ti-label">CHANNEL RETURN</span>
+            <span className="ti-label">CHANNEL / SWATH</span>
             <span className="ti-val ti-val--mono">{channel} [CH {channel === 'PORT' ? '1' : '2'}]</span>
           </div>
           <div className="ti-card-row">
-            <span className="ti-label">FRAME / TIMESTAMP</span>
-            <span className="ti-val ti-val--mono">{selectedTarget.frame || 'F-0428'} ({selectedTarget.timeS || '00:14.2'})</span>
+            <span className="ti-label">NORM BOUNDS (X, Y)</span>
+            <span className="ti-val ti-val--mono">{bx}%, {by}%</span>
           </div>
           <div className="ti-card-row">
-            <span className="ti-label">EST. LATITUDE</span>
+            <span className="ti-label">EXTENT (W &times; H)</span>
+            <span className="ti-val ti-val--mono">{bw}% &times; {bh}%</span>
+          </div>
+        </div>
+
+        {/* Navigation & Telemetry (Honest states) */}
+        <div className="ti-card">
+          <div className="ti-card-header-sm">GEOSPATIAL TELEMETRY</div>
+          <div className="ti-card-row">
+            <span className="ti-label">LATITUDE</span>
             <span className="ti-val ti-val--mono">
-              {selectedTarget.geotag?.latitude ? `${Number(selectedTarget.geotag.latitude).toFixed(5)}° N` : '43.06123° N'}
+              {hasGeotag ? `${Number(selectedTarget.geotag.latitude).toFixed(5)}° N` : 'Unavailable (No GPS fix)'}
             </span>
           </div>
           <div className="ti-card-row">
-            <span className="ti-label">EST. LONGITUDE</span>
+            <span className="ti-label">LONGITUDE</span>
             <span className="ti-val ti-val--mono">
-              {selectedTarget.geotag?.longitude ? `${Math.abs(Number(selectedTarget.geotag.longitude)).toFixed(5)}° W` : '70.71524° W'}
+              {hasGeotag ? `${Math.abs(Number(selectedTarget.geotag.longitude)).toFixed(5)}° W` : 'Unavailable'}
+            </span>
+          </div>
+          <div className="ti-card-row">
+            <span className="ti-label">SENSOR ALTITUDE</span>
+            <span className="ti-val ti-val--mono">
+              {selectedTarget.geotag?.depth_meters != null
+                ? `${Number(selectedTarget.geotag.depth_meters).toFixed(1)} m`
+                : 'Unavailable'}
             </span>
           </div>
         </div>
 
         {/* Operator Verification Actions */}
         <div className="ti-actions-section">
-          <span className="ti-section-title">OPERATOR VERIFICATION</span>
+          <div className="ti-section-header">
+            <span className="ti-section-title">OPERATOR VERIFICATION</span>
+            <span className="ti-review-status-indicator">
+              {selectedTarget.status === 'Operator accepted' || selectedTarget.status === 'Confirmed'
+                ? 'Confirmed'
+                : selectedTarget.status === 'False Positive'
+                ? 'False Positive'
+                : selectedTarget.status === 'Pending Review'
+                ? 'Flagged'
+                : 'Review Pending'}
+            </span>
+          </div>
           <div className="ti-btn-group">
             <button
               type="button"
-              className={`ti-btn ti-btn--accept ${selectedTarget.status === 'Operator accepted' ? 'ti-btn--active' : ''}`}
-              onClick={() => onUpdateTargetStatus(selectedTarget.id, 'Operator accepted')}
+              className={`ti-btn ti-btn--accept ${selectedTarget.status === 'Operator accepted' || selectedTarget.status === 'Confirmed' ? 'ti-btn--active' : ''}`}
+              onClick={() => onUpdateTargetStatus(selectedTarget.id, 'Confirmed')}
             >
-              Confirm Target
+              Confirm Detection
             </button>
             <button
               type="button"
               className={`ti-btn ti-btn--review ${selectedTarget.status === 'Pending Review' ? 'ti-btn--active' : ''}`}
               onClick={() => onUpdateTargetStatus(selectedTarget.id, 'Pending Review')}
             >
-              Flag Review
+              Flag for Review
             </button>
             <button
               type="button"

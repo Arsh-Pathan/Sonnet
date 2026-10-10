@@ -162,10 +162,13 @@ class YoloDetector:
                         )
                         centroid = res.get("geometry", {}).get("centroid_wgs84", {})
                         metrics = res.get("metrics", {})
+                        lat = centroid.get("latitude")
+                        lon = centroid.get("longitude")
+                        depth = metrics.get("sensor_altitude_m")
                         geotag_dict = {
-                            "latitude": centroid.get("latitude", 43.06123),
-                            "longitude": centroid.get("longitude", -70.71524),
-                            "depth_meters": metrics.get("sensor_altitude_m", 18.2),
+                            "latitude": lat,
+                            "longitude": lon,
+                            "depth_meters": depth,
                             "channel": channel,
                             "status": res.get("status", "GEOTAGGED"),
                             "geometry": res.get("geometry"),
@@ -173,15 +176,6 @@ class YoloDetector:
                         }
                     except Exception:
                         geotag_dict = None
-
-                if not geotag_dict:
-                    geotag_dict = {
-                        "latitude": 43.06123,
-                        "longitude": -70.71524,
-                        "depth_meters": 18.2,
-                        "channel": channel,
-                        "status": "ESTIMATED"
-                    }
 
                 detections.append({
                     "detection_id": f"det_{det_id_counter:03d}",

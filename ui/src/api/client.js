@@ -55,6 +55,19 @@ export async function checkHealth(signal) {
 }
 
 /**
+ * GET /api/v1/model/status
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{model_name: string, model_ready: boolean, model_loaded: boolean, classes: string[]}>}
+ */
+export async function getModelStatus(signal) {
+  const response = await fetch(`${API_BASE_URL}/api/v1/model/status`, { signal })
+  if (!response.ok) {
+    throw await parseError(response)
+  }
+  return response.json()
+}
+
+/**
  * 2. Start Detection Endpoint: POST /api/v1/detect
  * Dispatches multipart/form-data upload with 'file'.
  * Returns job_id and status: "processing_async".
@@ -104,25 +117,15 @@ export async function getJobStatus(jobId, signal) {
  * @param {AbortSignal} [options.signal]
  * @param {(stage: string, meta?: any) => void} [options.onStageChange]
  * @param {(jobId: string) => void} [options.onJobRegistered]
+/**
+ * Streams job status and detections via WebSocket until completion
+ * @param {string} jobId
+ * @param {Object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @param {(stage: string, meta?: any) => void} [options.onStageChange]
  * @returns {Promise<{job_id: string, status: string, detections: Array}>}
  */
-export async function detectFileAsync(
-  file,
-  { signal, onStageChange, onJobRegistered } = {}
-) {
-  onStageChange?.('Uploading sonar payload and registering async job...')
-
-  const initResult = await initiateDetection(file, { signal })
-  const jobId = initResult.job_id
-
-  if (!jobId) {
-    // If backend returns immediate synchronous detections
-    return initResult
-  }
-
-  onJobRegistered?.(jobId)
-  onStageChange?.(`Job registered (${jobId}). Opening real-time WebSocket connection...`, { jobId })
-
+export async function streamJobResult(jobId, { signal, onStageChange } = {}) {
   const wsUrl = getWebSocketUrl(jobId)
 
   return new Promise((resolve, reject) => {
@@ -223,7 +226,6 @@ export async function detectFileAsync(
       isFinished = true
       cleanup()
 
-      // If socket closed before completion, attempt fallback REST status check
       getJobStatus(jobId, signal)
         .then((fallbackData) => {
           if (fallbackData.status === 'completed') {
@@ -237,6 +239,67 @@ export async function detectFileAsync(
         })
     }
   })
+}
+
+/**
+ * 4. Real-Time Detection with Native WebSocket Push Streaming (Phase 4)
+ * @param {File} file
+ * @param {Object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @param {(stage: string, meta?: any) => void} [options.onStageChange]
+ * @param {(jobId: string) => void} [options.onJobRegistered]
+ * @returns {Promise<{job_id: string, status: string, detections: Array}>}
+ */
+export async function detectFileAsync(
+  file,
+  { signal, onStageChange, onJobRegistered } = {}
+) {
+  onStageChange?.('Uploading sonar payload and registering async job...')
+
+  const initResult = await initiateDetection(file, { signal })
+  const jobId = initResult.job_id
+
+  if (!jobId) {
+    return initResult
+  }
+
+  onJobRegistered?.(jobId)
+  onStageChange?.(`Job registered (${jobId}). Opening real-time WebSocket connection...`, { jobId })
+
+  return await streamJobResult(jobId, { signal, onStageChange })
+}
+
+/**
+ * Executes inference on the backend reference sonar shipwreck scan asset
+ * @param {Object} [options]
+ * @param {AbortSignal} [options.signal]
+ * @param {(stage: string, meta?: any) => void} [options.onStageChange]
+ * @param {(jobId: string) => void} [options.onJobRegistered]
+ * @returns {Promise<{job_id: string, status: string, detections: Array}>}
+ */
+export async function detectReferenceScanAsync({ signal, onStageChange, onJobRegistered } = {}) {
+  onStageChange?.('Requesting YOLOv11s inference on reference sonar scan...')
+
+  const response = await fetch(`${API_BASE_URL}/api/v1/detect/reference`, {
+    method: 'POST',
+    signal,
+  })
+
+  if (!response.ok) {
+    throw await parseError(response)
+  }
+
+  const initResult = await response.json()
+  const jobId = initResult.job_id
+
+  if (!jobId) {
+    return initResult
+  }
+
+  onJobRegistered?.(jobId)
+  onStageChange?.(`Job registered (${jobId}). Opening real-time WebSocket connection...`, { jobId })
+
+  return await streamJobResult(jobId, { signal, onStageChange })
 }
 
 /**
@@ -354,3 +417,33 @@ export async function renderSonarImageBlob(file, signal) {
   }
   return response.blob()
 }
+
+/**
+ * 10. Persist Operator Detection Review: PATCH /api/v1/jobs/{job_id}/detections/{detection_id}/review
+ * @param {string} jobId
+ * @param {string} detectionId
+ * @param {'confirmed' | 'flagged' | 'rejected' | 'unreviewed'} reviewStatus
+ * @param {string|null} [notes]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<{status: string, detection: Object}>}
+ */
+export async function updateDetectionReview(jobId, detectionId, reviewStatus, notes = null, signal) {
+  if (!jobId || !detectionId) return null
+  const response = await fetch(`${API_BASE_URL}/api/v1/jobs/${jobId}/detections/${detectionId}/review`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      review_status: reviewStatus,
+      operator_notes: notes,
+    }),
+    signal,
+  })
+
+  if (!response.ok) {
+    throw await parseError(response)
+  }
+  return response.json()
+}

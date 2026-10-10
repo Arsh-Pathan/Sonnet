@@ -102,3 +102,8 @@ class PaginatedHistoryResponse(BaseModel):
     skip: int
     limit: int
     total: Optional[int] = None
+
+class ReviewUpdateRequest(BaseModel):
+    review_status: str = Field(..., description="'confirmed', 'flagged', 'rejected', or 'unreviewed'")
+    operator_notes: Optional[str] = None
+

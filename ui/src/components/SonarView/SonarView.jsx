@@ -16,14 +16,14 @@ function getCanvasFilter(displaySettings) {
     case 'Greyscale':
       return `grayscale(100%) brightness(${bVal}) contrast(${cVal})`
     case 'Hot':
-      return `sepia(100%) saturate(350%) hue-rotate(330deg) brightness(${bVal * 1.1}) contrast(${cVal * 1.2})`
+      return `sepia(100%) saturate(300%) hue-rotate(330deg) brightness(${bVal * 1.05}) contrast(${cVal * 1.15})`
     case 'Copper':
-      return `sepia(90%) saturate(220%) hue-rotate(345deg) brightness(${bVal}) contrast(${cVal})`
+      return `sepia(80%) saturate(200%) hue-rotate(345deg) brightness(${bVal}) contrast(${cVal})`
     case 'MultiBronze':
-      return `sepia(95%) saturate(260%) hue-rotate(355deg) brightness(${bVal * 1.05}) contrast(${cVal * 1.15})`
+      return `sepia(90%) saturate(240%) hue-rotate(355deg) brightness(${bVal * 1.05}) contrast(${cVal * 1.1})`
     case 'MytisBronze':
     default:
-      return `sepia(85%) saturate(190%) hue-rotate(350deg) brightness(${bVal}) contrast(${cVal})`
+      return `sepia(80%) saturate(180%) hue-rotate(350deg) brightness(${bVal}) contrast(${cVal})`
   }
 }
 
@@ -31,7 +31,6 @@ export default function SonarView({
   targets = [],
   selectedTargetId,
   onSelectTarget,
-  onAddTarget,
   displaySettings,
   imageUrl,
   onFileSelected,
@@ -39,17 +38,16 @@ export default function SonarView({
   isProcessing,
   stageMessage,
   hasUploadedScan,
+  sourceFileName,
 }) {
   const canvasRef = useRef(null)
   const imgRef = useRef(null)
-  const rafRef = useRef(null)
-  const pingPosRef = useRef(0)
   const fileInputRef = useRef(null)
   const [zoom, setZoom] = useState(1)
   const [showOverlays, setShowOverlays] = useState(true)
-  const [isLiveScrolling, setIsLiveScrolling] = useState(true)
   const [hoveredTargetId, setHoveredTargetId] = useState(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [imageDims, setImageDims] = useState({ width: 1376, height: 768 })
 
   const activeImageSrc = imageUrl || DEFAULT_SONAR_IMAGE
 
@@ -83,7 +81,7 @@ export default function SonarView({
     e.target.value = ''
   }
 
-  // Load and render authentic side-scan sonar image with ping sweep
+  // Draw acoustic sonar frame to canvas whenever image or display settings change
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -102,55 +100,22 @@ export default function SonarView({
     img.onload = () => {
       if (!isMounted) return
       imgRef.current = img
+      setImageDims({ width: img.naturalWidth || 1376, height: img.naturalHeight || 768 })
 
-      function render() {
-        if (!isMounted) return
-        const w = canvas.width
-        const h = canvas.height
-
-        ctx.clearRect(0, 0, w, h)
-        ctx.filter = getCanvasFilter(displaySettings)
-
-        // Draw authentic acoustic sonar scan
-        ctx.drawImage(img, 0, 0, w, h)
-        ctx.filter = 'none'
-
-        // Render subtle real-time ping sweep bar in live mode
-        if (isLiveScrolling) {
-          pingPosRef.current = (pingPosRef.current + 0.8) % h
-          const py = pingPosRef.current
-
-          // Soft phosphorescent acoustic ping glow
-          const grad = ctx.createLinearGradient(0, py - 18, 0, py + 2)
-          grad.addColorStop(0, 'rgba(56, 189, 248, 0)')
-          grad.addColorStop(0.85, 'rgba(56, 189, 248, 0.08)')
-          grad.addColorStop(1, 'rgba(56, 189, 248, 0.45)')
-
-          ctx.fillStyle = grad
-          ctx.fillRect(0, Math.max(0, py - 18), w, 20)
-
-          // Leading edge hairline
-          ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)'
-          ctx.lineWidth = 1
-          ctx.beginPath()
-          ctx.moveTo(0, py)
-          ctx.lineTo(w, py)
-          ctx.stroke()
-        }
-
-        rafRef.current = requestAnimationFrame(render)
-      }
-
-      render()
+      const w = canvas.width
+      const h = canvas.height
+      ctx.clearRect(0, 0, w, h)
+      ctx.filter = getCanvasFilter(displaySettings)
+      ctx.drawImage(img, 0, 0, w, h)
+      ctx.filter = 'none'
     }
 
     return () => {
       isMounted = false
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
-  }, [activeImageSrc, displaySettings, isLiveScrolling])
+  }, [activeImageSrc, displaySettings])
 
-  // Normalize targets for bounding box rendering
+  // Normalize targets for bounding box rendering with real detection IDs and coordinates
   const normalizedTargets = (targets || []).map((t, idx) => {
     let bx = 0, by = 0, bw = 0, bh = 0
     if (t.bbox) {
@@ -168,10 +133,11 @@ export default function SonarView({
     }
     return {
       ...t,
-      id: t.id || `TRK-${String(idx + 1).padStart(3, '0')}`,
+      id: t.id || t.detection_id || `det_${String(idx + 1).padStart(3, '0')}`,
       bbox: { x: bx, y: by, w: bw, h: bh },
-      type: t.type || t.class_name || 'sonar_target',
-      confidence: t.confidence ?? t.modelScore ?? 0.85,
+      type: t.type || t.class_name || 'anomaly',
+      class: t.class || (t.class_name ? t.class_name.replace(/_/g, ' ').toUpperCase() : 'ANOMALY'),
+      confidence: Number(t.confidence ?? t.modelScore ?? 0.0),
       status: t.status || 'Detected',
     }
   })
@@ -179,6 +145,8 @@ export default function SonarView({
   const confirmedCount = normalizedTargets.filter(
     t => t.status === 'Operator accepted' || t.status === 'Confirmed'
   ).length
+
+  const displayName = sourceFileName || (hasUploadedScan ? 'Uploaded Sonar Scan' : 'Reference Shipwreck Scan (780 kHz)')
 
   return (
     <div
@@ -190,8 +158,9 @@ export default function SonarView({
       {/* 1. Header Toolbar */}
       <div className="sonar-view__titlebar">
         <div className="sonar-view__title-left">
-          <span className={`sonar-view__indicator ${isLiveScrolling ? 'sonar-view__indicator--live' : ''}`} />
-          <span className="sonar-view__title">Sidescan View (Live 780 kHz)</span>
+          <span className="sonar-view__source-tag">SOURCE</span>
+          <span className="sonar-view__title">{displayName}</span>
+          <span className="sonar-view__dims">{imageDims.width} &times; {imageDims.height} px</span>
         </div>
 
         <div className="sonar-view__toolbar">
@@ -204,11 +173,11 @@ export default function SonarView({
           />
           <button
             type="button"
-            className="sonar-tb-btn sonar-tb-btn--upload"
+            className="sonar-tb-btn sonar-tb-btn--primary"
             onClick={() => fileInputRef.current?.click()}
-            title="Upload your own side-scan sonar image (.png, .jpg, .tiff) or raw log to run YOLO detection"
+            title="Upload your own side-scan sonar image (.png, .jpg, .tiff) or raw survey log"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" style={{ marginRight: 4 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: 4 }}>
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
@@ -221,22 +190,11 @@ export default function SonarView({
               type="button"
               className="sonar-tb-btn"
               onClick={onResetDemo}
-              title="Reset to sample shipwreck scan"
+              title="Reset to reference shipwreck scan"
             >
-              DEMO SCAN
+              REFERENCE SCAN
             </button>
           )}
-
-          <span className="sonar-tb-sep" />
-
-          <button
-            type="button"
-            className={`sonar-tb-btn ${isLiveScrolling ? 'sonar-tb-btn--active' : ''}`}
-            onClick={() => setIsLiveScrolling(s => !s)}
-            title={isLiveScrolling ? 'Pause Live Ping Sweep' : 'Resume Live Ping Sweep'}
-          >
-            {isLiveScrolling ? 'FREEZE' : 'LIVE'}
-          </button>
 
           <span className="sonar-tb-sep" />
 
@@ -246,7 +204,7 @@ export default function SonarView({
             title="Zoom In"
             onClick={() => setZoom(z => Math.min(2.5, +(z + 0.2).toFixed(1)))}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" />
             </svg>
           </button>
@@ -256,17 +214,17 @@ export default function SonarView({
             title="Zoom Out"
             onClick={() => setZoom(z => Math.max(0.6, +(z - 0.2).toFixed(1)))}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" />
             </svg>
           </button>
           <button
             type="button"
             className="sonar-tb-icon-btn"
-            title="Fit to Window"
+            title="Reset Zoom / Fit"
             onClick={() => setZoom(1)}
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M9 3v18" /><path d="M15 3v18" />
             </svg>
           </button>
@@ -277,9 +235,9 @@ export default function SonarView({
             type="button"
             className={`sonar-tb-btn ${showOverlays ? 'sonar-tb-btn--active' : ''}`}
             onClick={() => setShowOverlays(o => !o)}
-            title="Toggle Target Bounding Boxes and HUD Reticles"
+            title="Toggle Target Bounding Boxes and Labels"
           >
-            {showOverlays ? 'RETICLES: ON' : 'RETICLES: OFF'}
+            {showOverlays ? 'OVERLAYS: VISIBLE' : 'OVERLAYS: HIDDEN'}
           </button>
         </div>
       </div>
@@ -288,36 +246,36 @@ export default function SonarView({
       {isDragOver && (
         <div className="sonar-dropzone-overlay">
           <div className="sonar-dropzone-modal">
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#00c2e0" strokeWidth="2">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
             </svg>
-            <span className="sonar-dropzone-title">DROP SONAR IMAGE OR LOG HERE</span>
-            <span className="sonar-dropzone-sub">YOLOv11s will immediately analyze and detect targets</span>
+            <span className="sonar-dropzone-title">DROP SONAR IMAGE OR SURVEY LOG</span>
+            <span className="sonar-dropzone-sub">YOLOv11s will process detections immediately</span>
           </div>
         </div>
       )}
 
-      {/* Real-time Analyzing HUD */}
+      {/* Inference Progress Card */}
       {isProcessing && (
         <div className="sonar-analyzing-overlay">
           <div className="sonar-analyzing-card">
             <div className="sonar-analyzing-spinner" />
-            <span className="sonar-analyzing-title">YOLOv11s ANALYZING SCAN</span>
-            <span className="sonar-analyzing-stage">{stageMessage || 'Running neural inference on side-scan imagery...'}</span>
+            <span className="sonar-analyzing-title">INFERENCE IN PROGRESS</span>
+            <span className="sonar-analyzing-stage">{stageMessage || 'Running YOLOv11s inference pipeline...'}</span>
           </div>
         </div>
       )}
 
-      {/* Zero Targets In User Scan Notification */}
-      {hasUploadedScan && !isProcessing && normalizedTargets.length === 0 && (
+      {/* Zero Detections Notification */}
+      {!isProcessing && normalizedTargets.length === 0 && (
         <div className="sonar-no-targets-badge">
-          0 ANOMALIES DETECTED IN THIS SCAN | LOWER CONFIDENCE IN SIDEBAR TO INSPECT WEAK RETURNS
+          0 ANOMALIES DETECTED &bull; ADJUST CONFIDENCE THRESHOLD IN SIDEBAR OR LOAD SCAN
         </div>
       )}
 
-      {/* 2. Slant-Range Hydrographic Scale (Top Graticule) */}
+      {/* 2. Hydrographic Ruler */}
       <div className="sonar-ruler">
         <span className="sonar-ruler__edge">PORT 100m</span>
         <span className="sonar-ruler__mark">-75m</span>
@@ -330,7 +288,7 @@ export default function SonarView({
         <span className="sonar-ruler__edge">100m STBD</span>
       </div>
 
-      {/* 3. Stage: Canvas + HUD Overlays */}
+      {/* 3. Stage: Canvas + Overlays */}
       <div className="sonar-view__stage" style={{ transform: `scale(${zoom})` }}>
         <canvas
           ref={canvasRef}
@@ -339,21 +297,16 @@ export default function SonarView({
           height={768}
         />
 
-        {/* Channel Watermark Badges */}
+        {/* Channel Badges */}
         <div className="sonar-ch-badge sonar-ch-badge--port">PORT CHANNEL [CH 1]</div>
         <div className="sonar-ch-badge sonar-ch-badge--starboard">STARBOARD CHANNEL [CH 2]</div>
 
-        {/* Top-Left Telemetry Watermark */}
-        <div className="sonar-watermark">
-          SONNET | SIDESCAN SONAR TARGET DETECTION
-        </div>
-
-        {/* Top-Right Confirmed Targets Badge */}
+        {/* Confirmed Targets Badge */}
         <div className="sonar-confirmed-badge">
-          CONTACTS: {normalizedTargets.length} | CONFIRMED: {confirmedCount}
+          DETECTIONS: {normalizedTargets.length} | CONFIRMED: {confirmedCount}
         </div>
 
-        {/* Tactical Corner Reticles & Overlays */}
+        {/* Clean Detection Bounding Boxes & Reticles */}
         {showOverlays && (
           <>
             <svg className="sonar-view__overlay" viewBox="0 0 1 1" preserveAspectRatio="none">
@@ -361,11 +314,13 @@ export default function SonarView({
                 const { bbox, id } = t
                 const isSelected = id === selectedTargetId
                 const isHovered = id === hoveredTargetId
-                const cornerSizeX = Math.min(0.025, bbox.w * 0.35)
-                const cornerSizeY = Math.min(0.035, bbox.h * 0.35)
 
-                const strokeColor = isSelected ? '#00c2e0' : isHovered ? '#38bdf8' : '#f59e0b'
-                const strokeW = isSelected ? 0.0035 : 0.0022
+                const strokeColor = isSelected ? '#3b82f6' : isHovered ? '#60a5fa' : '#f59e0b'
+                const strokeWidth = isSelected ? 0.0035 : 0.002
+                const fillColor = isSelected ? 'rgba(59, 130, 246, 0.12)' : 'rgba(245, 158, 11, 0.04)'
+
+                const cornerLenX = Math.min(0.02, bbox.w * 0.3)
+                const cornerLenY = Math.min(0.025, bbox.h * 0.3)
 
                 return (
                   <g
@@ -376,96 +331,69 @@ export default function SonarView({
                     onMouseLeave={() => setHoveredTargetId(null)}
                     style={{ cursor: 'pointer' }}
                   >
-                    {/* Subtle Target Footprint Highlight */}
+                    {/* Primary Bounding Box */}
                     <rect
                       x={bbox.x}
                       y={bbox.y}
                       width={bbox.w}
                       height={bbox.h}
-                      fill={isSelected ? 'rgba(0, 194, 224, 0.12)' : 'rgba(245, 158, 11, 0.04)'}
-                      stroke={isSelected ? 'rgba(0, 194, 224, 0.4)' : 'rgba(245, 158, 11, 0.2)'}
-                      strokeWidth="0.001"
-                      strokeDasharray="0.004 0.003"
-                      vectorEffect="non-scaling-stroke"
-                    />
-
-                    {/* Top-Left Corner Bracket */}
-                    <path
-                      d={`M ${bbox.x + cornerSizeX} ${bbox.y} L ${bbox.x} ${bbox.y} L ${bbox.x} ${bbox.y + cornerSizeY}`}
-                      fill="none"
+                      fill={fillColor}
                       stroke={strokeColor}
-                      strokeWidth={strokeW}
+                      strokeWidth={strokeWidth}
                       vectorEffect="non-scaling-stroke"
                     />
 
-                    {/* Top-Right Corner Bracket */}
-                    <path
-                      d={`M ${bbox.x + bbox.w - cornerSizeX} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y + cornerSizeY}`}
-                      fill="none"
-                      stroke={strokeColor}
-                      strokeWidth={strokeW}
-                      vectorEffect="non-scaling-stroke"
-                    />
-
-                    {/* Bottom-Left Corner Bracket */}
-                    <path
-                      d={`M ${bbox.x} ${bbox.y + bbox.h - cornerSizeY} L ${bbox.x} ${bbox.y + bbox.h} L ${bbox.x + cornerSizeX} ${bbox.y + bbox.h}`}
-                      fill="none"
-                      stroke={strokeColor}
-                      strokeWidth={strokeW}
-                      vectorEffect="non-scaling-stroke"
-                    />
-
-                    {/* Bottom-Right Corner Bracket */}
-                    <path
-                      d={`M ${bbox.x + bbox.w} ${bbox.y + bbox.h - cornerSizeY} L ${bbox.x + bbox.w} ${bbox.y + bbox.h} L ${bbox.x + bbox.w - cornerSizeX} ${bbox.y + bbox.h}`}
-                      fill="none"
-                      stroke={strokeColor}
-                      strokeWidth={strokeW}
-                      vectorEffect="non-scaling-stroke"
-                    />
-
-                    {/* Center Crosshair Reticle for Selected Target */}
+                    {/* Corner Reinforcements for Selected Box */}
                     {isSelected && (
-                      <g opacity="0.85">
-                        <line
-                          x1={bbox.x + bbox.w / 2 - 0.008}
-                          y1={bbox.y + bbox.h / 2}
-                          x2={bbox.x + bbox.w / 2 + 0.008}
-                          y2={bbox.y + bbox.h / 2}
-                          stroke="#00c2e0"
-                          strokeWidth="0.002"
+                      <>
+                        <path
+                          d={`M ${bbox.x + cornerLenX} ${bbox.y} L ${bbox.x} ${bbox.y} L ${bbox.x} ${bbox.y + cornerLenY}`}
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth={0.004}
                           vectorEffect="non-scaling-stroke"
                         />
-                        <line
-                          x1={bbox.x + bbox.w / 2}
-                          y1={bbox.y + bbox.h / 2 - 0.012}
-                          x2={bbox.x + bbox.w / 2}
-                          y2={bbox.y + bbox.h / 2 + 0.012}
-                          stroke="#00c2e0"
-                          strokeWidth="0.002"
+                        <path
+                          d={`M ${bbox.x + bbox.w - cornerLenX} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y} L ${bbox.x + bbox.w} ${bbox.y + cornerLenY}`}
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth={0.004}
                           vectorEffect="non-scaling-stroke"
                         />
-                      </g>
+                        <path
+                          d={`M ${bbox.x} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x} ${bbox.y + bbox.h} L ${bbox.x + cornerLenX} ${bbox.y + bbox.h}`}
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth={0.004}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <path
+                          d={`M ${bbox.x + bbox.w} ${bbox.y + bbox.h - cornerLenY} L ${bbox.x + bbox.w} ${bbox.y + bbox.h} L ${bbox.x + bbox.w - cornerLenX} ${bbox.y + bbox.h}`}
+                          fill="none"
+                          stroke="#ffffff"
+                          strokeWidth={0.004}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                      </>
                     )}
                   </g>
                 )
               })}
             </svg>
 
-            {/* Tactical HUD Chip Labels */}
+            {/* Clean Detection Labels */}
             {normalizedTargets.map(t => {
               const { bbox, id } = t
               const isSelected = id === selectedTargetId
               const isHovered = id === hoveredTargetId
-              const labelType = t.type ? t.type.toUpperCase().replace('_', ' ') : 'SONAR TARGET'
+              const labelType = t.class || (t.type ? t.type.toUpperCase().replace(/_/g, ' ') : 'ANOMALY')
               const confText = `${(t.confidence * 100).toFixed(1)}%`
               const sideText = t.side || (bbox.x < 0.5 ? 'PORT' : 'STBD')
 
               return (
                 <div
                   key={id}
-                  className={`sonar-tactical-chip ${isSelected ? 'sonar-tactical-chip--selected' : ''} ${isHovered ? 'sonar-tactical-chip--hovered' : ''}`}
+                  className={`sonar-label-chip ${isSelected ? 'sonar-label-chip--selected' : ''} ${isHovered ? 'sonar-label-chip--hovered' : ''}`}
                   style={{
                     left: `${Math.min(92, Math.max(1, bbox.x * 100))}%`,
                     top: `${Math.min(94, Math.max(1, bbox.y * 100))}%`,
@@ -475,7 +403,7 @@ export default function SonarView({
                   onMouseLeave={() => setHoveredTargetId(null)}
                 >
                   <div className="sonar-chip-header">
-                    <span className="sonar-chip-bullet" />
+                    <span className="sonar-chip-dot" />
                     <span className="sonar-chip-id">{id}</span>
                     <span className="sonar-chip-type">{labelType}</span>
                     <span className="sonar-chip-conf">{confText}</span>
@@ -483,7 +411,7 @@ export default function SonarView({
                   {isSelected && (
                     <div className="sonar-chip-sub">
                       <span>{sideText} CH</span>
-                      <span>•</span>
+                      <span>&bull;</span>
                       <span>{t.status.toUpperCase()}</span>
                     </div>
                   )}
@@ -493,9 +421,9 @@ export default function SonarView({
           </>
         )}
 
-        {/* Bottom Telemetry HUD */}
-        <div className="sonar-towfish-alt">
-          TOWFISH 3.2m ALT | 2.1 kts | 780 kHz CHIRP | DGPS FIX
+        {/* Bottom Status Ribbon */}
+        <div className="sonar-bottom-status">
+          ACOUSTIC SIDESCAN CHIRP | SLANT RANGE: 100m PORT / 100m STBD | PROCESSED VIA YOLOV11S
         </div>
       </div>
     </div>

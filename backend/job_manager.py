@@ -124,4 +124,51 @@ class AsyncJobManager:
                 )
                 for job in db_jobs
             ]
+
+    async def update_detection_review(
+        self,
+        job_id: str,
+        detection_id: str,
+        review_status: str,
+        notes: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        await self._ensure_init()
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(DBJob).filter(DBJob.job_id == job_id))
+            db_job = result.scalar_one_or_none()
+            if not db_job:
+                return None
+
+            detections = list(db_job.detections or [])
+            updated_det = None
+            for idx, det in enumerate(detections):
+                if det.get("detection_id") == detection_id or det.get("id") == detection_id:
+                    detections[idx] = {
+                        **det,
+                        "review_status": review_status,
+                        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                        "operator_notes": notes
+                    }
+                    updated_det = detections[idx]
+                    break
+
+            if updated_det is not None:
+                db_job.detections = detections
+                await session.commit()
+                await session.refresh(db_job)
+
+                from backend.ws_manager import ws_manager
+                asyncio.create_task(ws_manager.broadcast_job_update(
+                    job_id,
+                    {
+                        "job_id": db_job.job_id,
+                        "status": db_job.status,
+                        "detections": db_job.detections or [],
+                        "error": db_job.error
+                    }
+                ))
+
+            return updated_det
+
 job_manager = AsyncJobManager()
+

@@ -1,7 +1,7 @@
 .target-inspector {
-  width: 280px;
-  background: #090e15;
-  border-left: 1px solid #1a2736;
+  width: var(--rightpanel-w, 280px);
+  background: #14171d;
+  border-left: 1px solid #282f3a;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -9,10 +9,10 @@
 }
 
 .ti-header {
-  height: 32px;
-  background: #0d1520;
-  border-bottom: 1px solid #182635;
-  padding: 0 12px;
+  height: 38px;
+  background: #14171d;
+  border-bottom: 1px solid #282f3a;
+  padding: 0 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -34,39 +34,40 @@
 
 .ti-title {
   font-family: var(--font-ui);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
   color: #f1f5f9;
 }
 
 .ti-badge {
   font-family: var(--font-mono);
-  font-size: 8.5px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 2px;
-  background: rgba(56, 189, 248, 0.15);
-  border: 1px solid #38bdf8;
-  color: #38bdf8;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: #1e2430;
+  border: 1px solid #2e3746;
+  color: #94a3b8;
 }
 
+.ti-badge--confirmed,
 .ti-badge--operator-accepted {
-  background: rgba(34, 197, 94, 0.15);
-  border-color: #22c55e;
-  color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #4ade80;
 }
 
 .ti-badge--false-positive {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: #ef4444;
-  color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #f87171;
 }
 
 .ti-badge--pending-review {
-  background: rgba(245, 158, 11, 0.15);
-  border-color: #f59e0b;
-  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
 }
 
 .ti-body {
@@ -75,19 +76,18 @@
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 /* Acoustic Zoom Viewport */
 .ti-viewport {
   width: 100%;
-  height: 140px;
-  border-radius: 3px;
+  height: 130px;
+  border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid #1e2f42;
-  background: #040201;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  border: 1px solid #282f3a;
+  background: #0d1015;
 }
 
 .ti-viewport-img {
@@ -97,37 +97,38 @@
   display: block;
 }
 
-.ti-viewport-reticle {
-  position: absolute;
-  inset: 12px;
-  border: 1px dashed rgba(0, 194, 224, 0.6);
-  pointer-events: none;
-  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.7);
-}
-
 .ti-viewport-tag {
   position: absolute;
   top: 6px;
   left: 6px;
   font-family: var(--font-mono);
-  font-size: 8px;
-  font-weight: 700;
-  padding: 1px 5px;
-  background: rgba(4, 9, 15, 0.85);
-  border: 1px solid #1e2f42;
-  color: #38bdf8;
-  border-radius: 2px;
+  font-size: 8.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid #282f3a;
+  color: #94a3b8;
+  border-radius: 3px;
 }
 
 /* Info Cards */
 .ti-card {
-  background: #0f1722;
-  border: 1px solid #1a2838;
-  border-radius: 3px;
-  padding: 8px 10px;
+  background: #181c23;
+  border: 1px solid #282f3a;
+  border-radius: 6px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.ti-card-header-sm {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 600;
+  color: #64748b;
+  letter-spacing: 0.5px;
+  margin-bottom: 2px;
 }
 
 .ti-card-row {
@@ -138,36 +139,38 @@
 
 .ti-label {
   font-family: var(--font-ui);
-  font-size: 9px;
-  color: #728a9e;
-  font-weight: 600;
-  letter-spacing: 0.3px;
+  font-size: 10.5px;
+  color: #94a3b8;
 }
 
 .ti-val {
   font-family: var(--font-ui);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
   color: #e2e8f0;
+}
+
+.ti-val--strong {
+  font-weight: 600;
 }
 
 .ti-val--mono {
   font-family: var(--font-mono);
-  color: #38bdf8;
+  font-size: 10px;
+  color: #cbd5e1;
 }
 
-/* Confidence meter */
+/* Confidence Bar */
 .ti-conf-bar-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .ti-conf-bar {
   flex: 1;
-  height: 5px;
-  background: #192330;
+  height: 6px;
+  background: #242a34;
   border-radius: 3px;
   overflow: hidden;
 }
@@ -175,89 +178,109 @@
 .ti-conf-fill {
   height: 100%;
   border-radius: 3px;
-  transition: width 0.3s;
+  transition: width 0.3s ease;
 }
 
 .ti-conf-pct {
   font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
+  font-size: 9.5px;
+  font-weight: 600;
   color: #94a3b8;
+  white-space: nowrap;
 }
 
-/* Action Buttons */
+/* Operator Actions Section */
 .ti-actions-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-top: 4px;
+  background: #181c23;
+  border: 1px solid #282f3a;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.ti-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .ti-section-title {
   font-family: var(--font-ui);
-  font-size: 9px;
-  font-weight: 700;
-  color: #64748b;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #94a3b8;
   letter-spacing: 0.5px;
+}
+
+.ti-review-status-indicator {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  color: #64748b;
 }
 
 .ti-btn-group {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .ti-btn {
   width: 100%;
   height: 28px;
-  border-radius: 3px;
+  border-radius: 4px;
   font-family: var(--font-ui);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
   cursor: pointer;
   border: 1px solid transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
 }
 
 .ti-btn--accept {
-  background: rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.4);
+  background: #1c2620;
+  border-color: #23422e;
   color: #4ade80;
 }
-.ti-btn--accept:hover, .ti-btn--accept.ti-btn--active {
-  background: #22c55e;
-  border-color: #22c55e;
-  color: #000000;
-}
-
-.ti-btn--review {
-  background: rgba(245, 158, 11, 0.12);
-  border-color: rgba(245, 158, 11, 0.4);
-  color: #facc15;
-}
-.ti-btn--review:hover, .ti-btn--review.ti-btn--active {
-  background: #eab308;
-  border-color: #eab308;
-  color: #000000;
-}
-
-.ti-btn--reject {
-  background: rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.4);
-  color: #f87171;
-}
-.ti-btn--reject:hover, .ti-btn--reject.ti-btn--active {
-  background: #ef4444;
-  border-color: #ef4444;
+.ti-btn--accept:hover,
+.ti-btn--accept.ti-btn--active {
+  background: #16a34a;
+  border-color: #15803d;
   color: #ffffff;
 }
 
-/* Stats grid for default view */
+.ti-btn--review {
+  background: #262118;
+  border-color: #453721;
+  color: #fbbf24;
+}
+.ti-btn--review:hover,
+.ti-btn--review.ti-btn--active {
+  background: #d97706;
+  border-color: #b45309;
+  color: #ffffff;
+}
+
+.ti-btn--reject {
+  background: #261919;
+  border-color: #452323;
+  color: #f87171;
+}
+.ti-btn--reject:hover,
+.ti-btn--reject.ti-btn--active {
+  background: #dc2626;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+
+/* Empty State / Overview */
 .ti-stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -265,96 +288,95 @@
 }
 
 .ti-stat-card {
-  background: #0f1722;
-  border: 1px solid #1a2838;
-  border-radius: 3px;
-  padding: 10px 8px;
+  background: #181c23;
+  border: 1px solid #282f3a;
+  border-radius: 6px;
+  padding: 10px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  text-align: center;
+  gap: 2px;
 }
 
 .ti-stat-val {
   font-family: var(--font-mono);
   font-size: 18px;
-  font-weight: 800;
-  line-height: 1.2;
+  font-weight: 700;
 }
 
-.ti-stat-val--cyan { color: #00c2e0; }
-.ti-stat-val--green { color: #22c55e; }
-.ti-stat-val--amber { color: #facc15; }
+.ti-stat-val--blue { color: #60a5fa; }
+.ti-stat-val--green { color: #4ade80; }
+.ti-stat-val--amber { color: #fbbf24; }
 .ti-stat-val--red { color: #f87171; }
 
 .ti-stat-lbl {
   font-family: var(--font-ui);
-  font-size: 8.5px;
-  color: #64748b;
-  margin-top: 2px;
+  font-size: 9.5px;
+  color: #94a3b8;
 }
 
 .ti-quick-actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-top: 6px;
 }
 
 .ti-action-btn {
+  width: 100%;
   height: 32px;
-  border-radius: 3px;
+  border-radius: 6px;
   font-family: var(--font-ui);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
 }
 
 .ti-action-btn--primary {
-  background: #00c2e0;
-  color: #06111e;
-  border: 1px solid #00c2e0;
+  background: #2563eb;
+  border: 1px solid #1d4ed8;
+  color: #ffffff;
 }
 .ti-action-btn--primary:hover {
-  background: #38bdf8;
-  box-shadow: 0 0 10px rgba(0, 194, 224, 0.4);
+  background: #1d4ed8;
 }
 
 .ti-action-btn--secondary {
-  background: #111a24;
-  color: #d1e2f0;
-  border: 1px solid #1e2e40;
+  background: #1c2028;
+  border: 1px solid #282f3a;
+  color: #cbd5e1;
 }
 .ti-action-btn--secondary:hover {
-  border-color: #38bdf8;
+  background: #252b36;
+  border-color: #3b4453;
   color: #ffffff;
 }
 
 .ti-instructions {
-  background: rgba(15, 23, 34, 0.6);
-  border: 1px dashed #1e2e40;
-  border-radius: 3px;
-  padding: 10px;
+  background: #181c23;
+  border: 1px solid #282f3a;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 4px;
 }
 
 .ti-instruction-title {
-  font-family: var(--font-ui);
-  font-size: 8.5px;
-  font-weight: 700;
-  color: #64748b;
-  letter-spacing: 0.5px;
   display: block;
-  margin-bottom: 4px;
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
 }
 
 .ti-instructions p {
   font-family: var(--font-ui);
-  font-size: 9.5px;
-  line-height: 1.4;
-  color: #728a9e;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: #64748b;
 }

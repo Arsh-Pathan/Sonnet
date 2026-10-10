@@ -133,3 +133,18 @@ async def test_job_manager_crud():
     job = await mgr.get_job(jid)
     assert job.status == "completed"
     assert len(job.detections) == 1
+
+    # Test updating detection review status
+    updated = await mgr.update_detection_review(jid, "det_001", "confirmed", "Verified by operator")
+    assert updated is not None
+    assert updated["review_status"] == "confirmed"
+    assert updated["operator_notes"] == "Verified by operator"
+    assert "reviewed_at" in updated
+
+def test_patch_detection_review_api():
+    # Test PATCH review endpoint
+    response = client.patch(
+        "/api/v1/jobs/nonexistent_job_123/detections/det_001/review",
+        json={"review_status": "confirmed"}
+    )
+    assert response.status_code == 404
