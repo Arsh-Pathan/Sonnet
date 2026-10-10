@@ -380,7 +380,7 @@ class SonnetApp(ctk.CTk):
                 self.after(0, lambda l=lat, lo=lon, d=depth: self.update_nav(l, lo, d))
             
             if model is not None:
-                results = model.track(frame, conf=conf, iou=iou, max_det=max_det, persist=True, verbose=False)
+                results = model.track(frame, conf=conf, iou=iou, max_det=max_det, persist=True, tracker="bytetrack.yaml", verbose=False)
                 res_frame = results[0].plot(conf=False) 
                 
                 self.process_detections(results[0], f"F-{frame_idx}", res_frame, is_video=True)
