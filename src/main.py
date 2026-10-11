@@ -1695,7 +1695,11 @@ class SonnetApp(ctk.CTk):
         h = max(10, self.lbl_video.winfo_height())
         if w > 10 and h > 10:
             img = Image.fromarray(rgb_frame)
-            img.thumbnail((w, h), Image.Resampling.LANCZOS)
+            if getattr(self, "is_xtf", False):
+                # Stretch waterfall to fill entire display viewport (no black voids)
+                img = img.resize((w, h), Image.Resampling.LANCZOS)
+            else:
+                img.thumbnail((w, h), Image.Resampling.LANCZOS)
             photo = ctk.CTkImage(light_image=img, dark_image=img, size=(img.width, img.height))
             self.after(0, self.update_image, photo)
 
