@@ -77,6 +77,11 @@ The underlying YOLO model (`sonar_yolo11s_balanced_v1_best.pt`) is specifically 
 * 📊 **CSV Data Table**: Raw telemetry, confidence scores, operator status, notes, and file paths.
 * 🌐 **GeoJSON Layer**: Standard GeoJSON FeatureCollection of Point geometries ready for direct drag-and-drop into **QGIS**, **ArcGIS**, or **Google Earth**.
 
+### 6. Live Acoustic A-Scan (Ping Profile)
+* **Real-Time Oscilloscope Trace**: Dynamic cross-track amplitude profile rendering acoustic signal intensity across the survey swath.
+* **Dual-Channel Symmetry**: Symmetrically maps **Port Range** (left) and **Starboard Range** (right) divided by the acoustic nadir centerline.
+* **XTF Integration**: Streams raw ping packet vectors (`packet.data[0]` and `packet.data[1]`) directly from `.xtf` files or cross-sectional waterfall slices.
+
 ---
 
 ## 📂 Project Directory Structure

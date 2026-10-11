@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import cv2
 from PIL import Image
@@ -711,19 +712,148 @@ class SonnetApp(ctk.CTk):
         self.tree.pack(fill="both", expand=True, pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
-        # Analytics Graph
+        # Dual-Mode Analysis & Oscilloscope Frame
         self.graph_frame = ctk.CTkFrame(self.bottom_frame, fg_color="transparent")
         self.graph_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=6)
+        self.graph_frame.grid_rowconfigure(1, weight=1)
+        self.graph_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(self.graph_frame, text="📊 Anomaly Distribution", font=ctk.CTkFont(size=12, weight="bold"), text_color="#4dabf7").pack(anchor="w")
+        # Header Switcher
+        self.analysis_header = ctk.CTkFrame(self.graph_frame, fg_color="transparent")
+        self.analysis_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+
+        self.seg_analysis_mode = ctk.CTkSegmentedButton(
+            self.analysis_header,
+            values=["📡 Live Acoustic A-Scan", "📊 Anomaly Distribution"],
+            command=self.on_analysis_mode_changed,
+            selected_color="#1c7ed6"
+        )
+        self.seg_analysis_mode.set("📡 Live Acoustic A-Scan")
+        self.seg_analysis_mode.pack(side="left")
+
+        # Container 1: Live Acoustic A-Scan (Oscilloscope View matching screenshot)
+        self.ascan_container = ctk.CTkFrame(self.graph_frame, fg_color="#18191d", corner_radius=6)
+        self.ascan_container.grid(row=1, column=0, sticky="nsew")
+        self.ascan_container.grid_rowconfigure(1, weight=1)
+        self.ascan_container.grid_columnconfigure(0, weight=1)
+
+        self.lbl_ascan_title = ctk.CTkLabel(
+            self.ascan_container,
+            text="LIVE ACOUSTIC A-SCAN (PING PROFILE)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#e9ecef"
+        )
+        self.lbl_ascan_title.grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
+
+        # Canvas for oscilloscope trace
+        self.canvas_ascan = tk.Canvas(
+            self.ascan_container,
+            bg="#0b0c0e",
+            highlightthickness=1,
+            highlightbackground="#2b2d35"
+        )
+        self.canvas_ascan.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
+        self.canvas_ascan.bind("<Configure>", lambda e: self.draw_idle_ascan())
+
+        # Container 2: Anomaly Distribution Bar Chart
+        self.dist_container = ctk.CTkFrame(self.graph_frame, fg_color="#18191d", corner_radius=6)
+        self.dist_container.grid_rowconfigure(1, weight=1)
+        self.dist_container.grid_columnconfigure(0, weight=1)
+
+        self.lbl_dist_title = ctk.CTkLabel(
+            self.dist_container,
+            text="📊 Anomaly Distribution",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#4dabf7"
+        )
+        self.lbl_dist_title.grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
 
         plt.style.use('dark_background')
-        self.fig, self.ax = plt.subplots(figsize=(4, 2.3), dpi=80)
-        self.fig.patch.set_facecolor('#121316')
-        self.ax.set_facecolor('#121316')
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self.fig, self.ax = plt.subplots(figsize=(4, 2.0), dpi=80)
+        self.fig.patch.set_facecolor('#18191d')
+        self.ax.set_facecolor('#18191d')
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.dist_container)
+        self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
         self.update_graph()
+        self.after(200, self.draw_idle_ascan)
+
+    # ==========================================
+    # ACOUSTIC A-SCAN (PING PROFILE) DISPLAY
+    # ==========================================
+    def on_analysis_mode_changed(self, choice):
+        if choice == "📡 Live Acoustic A-Scan":
+            self.dist_container.grid_forget()
+            self.ascan_container.grid(row=1, column=0, sticky="nsew")
+            self.draw_idle_ascan()
+        else:
+            self.ascan_container.grid_forget()
+            self.dist_container.grid(row=1, column=0, sticky="nsew")
+            self.update_graph()
+
+    def update_ascan(self, profile):
+        if profile is None or len(profile) == 0:
+            return
+        if not hasattr(self, 'canvas_ascan') or not self.canvas_ascan.winfo_exists():
+            return
+
+        self.current_ping_profile = profile
+
+        w = max(100, self.canvas_ascan.winfo_width())
+        h = max(60, self.canvas_ascan.winfo_height())
+
+        self.canvas_ascan.delete("all")
+
+        pad_x = 8
+        pad_y = 12
+        plot_w = w - 2 * pad_x
+        plot_h = h - 2 * pad_y
+        mid_x = pad_x + plot_w / 2.0
+
+        # Center vertical orange line (Nadir / Towfish centerline)
+        self.canvas_ascan.create_line(mid_x, 4, mid_x, h - 4, fill="#f76707", width=1.5)
+
+        # Normalize profile values
+        p_arr = np.asarray(profile, dtype=float)
+        p_min, p_max = float(np.min(p_arr)), float(np.max(p_arr))
+        if p_max > p_min:
+            norm = (p_arr - p_min) / (p_max - p_min)
+        else:
+            norm = np.zeros_like(p_arr)
+
+        # Downsample/interpolate to canvas width
+        num_pts = min(len(norm), int(plot_w))
+        if num_pts > 10:
+            indices = np.linspace(0, len(norm) - 1, num_pts).astype(int)
+            sampled = norm[indices]
+
+            # Invert Y axis: 0 is at bottom (h - pad_y), 1 is near top (pad_y)
+            x_pts = np.linspace(pad_x, pad_x + plot_w, num_pts)
+            y_pts = (h - pad_y) - sampled * (plot_h - 10)
+
+            coords = []
+            for xi, yi in zip(x_pts, y_pts):
+                coords.extend([float(xi), float(yi)])
+
+            if len(coords) >= 4:
+                self.canvas_ascan.create_line(*coords, fill="#ffd43b", width=1.5)
+
+        # Range text labels exactly matching user screenshot
+        self.canvas_ascan.create_text(pad_x + 38, h - pad_y - 4, text="Port Range", fill="#868e96", font=("Segoe UI", 9))
+        self.canvas_ascan.create_text(pad_x + plot_w - 38, h - pad_y - 4, text="Stbd Range", fill="#868e96", font=("Segoe UI", 9))
+
+    def draw_idle_ascan(self):
+        if not hasattr(self, 'current_ping_profile') or self.current_ping_profile is None:
+            # Baseline hydrophone background ping with center nadir deadzone and bottom bounce
+            t = np.linspace(-1, 1, 320)
+            base = 0.12 + 0.08 * (np.sin(16 * t) ** 2) + np.random.uniform(0.01, 0.05, 320)
+            # Nadir drop at vessel center
+            base[abs(t) < 0.09] = 0.015
+            # Primary acoustic bottom bounces
+            base[abs(t - 0.22) < 0.05] += 0.65
+            base[abs(t + 0.22) < 0.05] += 0.58
+            self.update_ascan(base)
+        else:
+            self.update_ascan(self.current_ping_profile)
 
     # ==========================================
     # MODEL MANAGEMENT & HOT-SWAPPING
@@ -818,6 +948,19 @@ class SonnetApp(ctk.CTk):
             self.is_xtf = True
             self.btn_play.configure(text="▶ PLAY XTF")
             self.lbl_time_status.configure(text="XTF Waterfall Stream")
+            self.seg_analysis_mode.set("📡 Live Acoustic A-Scan")
+            self.on_analysis_mode_changed("📡 Live Acoustic A-Scan")
+            try:
+                (fh, p) = pyxtf.xtf_read(self.media_path)
+                packets = p[pyxtf.XTFHeaderType.sonar]
+                if packets and len(packets[0].data) >= 2:
+                    p0 = np.asarray(packets[0].data[0], dtype=float)[::-1]
+                    s0 = np.asarray(packets[0].data[1], dtype=float)
+                    if len(p0) > 0 and len(s0) > 0:
+                        init_ping = np.concatenate([p0, s0])
+                        self.update_ascan(init_ping)
+            except Exception:
+                pass
         else:
             self.is_image = False
             self.is_xtf = False
@@ -907,6 +1050,10 @@ class SonnetApp(ctk.CTk):
             processed = self.apply_dsp_filters(frame)
             self.display_frame(processed)
             self.update_time_label(target_frame)
+            # Update A-Scan cross-sectional ping profile
+            gray_scan = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            ping_slice = gray_scan[gray_scan.shape[0] // 2, :].astype(float)
+            self.after(0, lambda s=ping_slice: self.update_ascan(s))
 
     def step_forward(self):
         if not self.cap or not self.cap.isOpened() or self.is_image:
@@ -962,6 +1109,11 @@ class SonnetApp(ctk.CTk):
         colored = self.apply_dsp_filters(res_frame)
         self.display_frame(colored)
 
+        # Update A-Scan ping profile for image
+        gray_scan = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        ping_slice = gray_scan[gray_scan.shape[0] // 2, :].astype(float)
+        self.after(0, lambda s=ping_slice: self.update_ascan(s))
+
     def play_loop(self):
         self.start_time = time.time()
         self.frames_processed = 0
@@ -992,6 +1144,11 @@ class SonnetApp(ctk.CTk):
 
             final_frame = self.apply_dsp_filters(res_frame)
             self.display_frame(final_frame)
+
+            # Update Live Acoustic A-Scan Ping Profile
+            gray_scan = cv2.cvtColor(res_frame, cv2.COLOR_BGR2GRAY)
+            ping_slice = gray_scan[gray_scan.shape[0] // 2, :].astype(float)
+            self.after(0, lambda s=ping_slice: self.update_ascan(s))
 
             cur_idx = self.current_frame_idx
             self.after(0, lambda idx=cur_idx: self.scrub_slider.set(idx))
@@ -1037,6 +1194,14 @@ class SonnetApp(ctk.CTk):
                 stbd_img = np.vstack(stbd_data)
                 port_img = np.fliplr(port_img)
                 combined = np.hstack((port_img, stbd_img)).astype(np.float32)
+
+                # Real acoustic A-Scan from latest ping packet in chunk
+                last_pkt = chunk[-1]
+                if len(last_pkt.data) >= 2 and len(last_pkt.data[0]) > 0 and len(last_pkt.data[1]) > 0:
+                    raw_port = np.asarray(last_pkt.data[0], dtype=float)[::-1]
+                    raw_stbd = np.asarray(last_pkt.data[1], dtype=float)
+                    ascan_slice = np.concatenate([raw_port, raw_stbd])
+                    self.after(0, lambda s=ascan_slice: self.update_ascan(s))
 
                 p2, p98 = np.percentile(combined, (2, 98))
                 if p98 > p2:
