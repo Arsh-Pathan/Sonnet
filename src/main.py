@@ -1184,14 +1184,10 @@ class SonnetApp(ctk.CTk):
 
         port_img = np.vstack(port_data)
         stbd_img = np.vstack(stbd_data)
-
-        # Flip port channel: left-right for nadir at center, up-down so along-track matches starboard
-        port_img = np.fliplr(port_img)
-        port_img = np.flipud(port_img)
-
-        # Smooth port channel to reduce grain and match starboard quality
+        # Invert / flip first section (Port) horizontally so nadir meets Starboard at the center line
+        # Smooth port channel to suppress speckle and grain, matching video and image inputs
         port_f = port_img.astype(np.float32)
-        port_f = cv2.GaussianBlur(port_f, (3, 3), 0)
+        port_f = cv2.GaussianBlur(port_f, (5, 5), 1.0)
 
         stbd_f = stbd_img.astype(np.float32)
 
