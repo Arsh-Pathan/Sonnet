@@ -1,0 +1,9 @@
+{
+  "metrics/precision(B)": 0.5547620899231089,
+  "metrics/recall(B)": 0.5390687551077695,
+  "metrics/mAP50(B)": 0.5244650030131233,
+  "metrics/mAP50-95(B)": 0.3419310219746322,
+  "fitness": 0.3419310219746322,
+  "weights": "/kaggle/working/sonar_training/yolo11s_balanced_v1/weights/best.pt",
+  "test_images": 2432
+}

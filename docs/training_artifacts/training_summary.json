@@ -1,0 +1,35 @@
+{
+  "dataset_root": "/kaggle/input/datasets/faaizhussain/marine-sonar-balanced-v1/production_balanced_v1",
+  "dataset_images": 14007,
+  "split_images": {
+    "train": 9356,
+    "val": 2219,
+    "test": 2432
+  },
+  "train_class_instances": {
+    "pipeline": 1278,
+    "shipwreck": 1627,
+    "mine_cylinder": 513,
+    "ghost_net": 3034,
+    "crab_pot": 3047
+  },
+  "model": "yolo11s.pt",
+  "epochs_requested": 100,
+  "image_size": 640,
+  "seed": 26057,
+  "test_metrics": {
+    "metrics/precision(B)": 0.5547620899231089,
+    "metrics/recall(B)": 0.5390687551077695,
+    "metrics/mAP50(B)": 0.5244650030131233,
+    "metrics/mAP50-95(B)": 0.3419310219746322,
+    "fitness": 0.3419310219746322,
+    "weights": "/kaggle/working/sonar_training/yolo11s_balanced_v1/weights/best.pt",
+    "test_images": 2432
+  },
+  "known_limitations": [
+    "Mine/cylinder remains the smallest class; downsampling cannot create new evidence.",
+    "Class and source domains remain correlated.",
+    "Source-specific empty labels are not verified negatives for every class.",
+    "Pipeline has no proper independent test source in this release."
+  ]
+}
