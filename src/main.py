@@ -554,6 +554,47 @@ class SonnetApp(ctk.CTk):
 
         try:
             import tkintermapview
+            import requests
+            import io
+            from PIL import ImageTk
+
+            # Patch tkintermapview for Python 3.12+ / 3.14 thread-safe PhotoImage creation
+            if not getattr(tkintermapview.TkinterMapView, "_photoimage_thread_patched", False):
+                def _patched_request_image(self, zoom: int, x: int, y: int, db_cursor=None):
+                    try:
+                        url = self.tile_server.replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(zoom))
+                        resp = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=6)
+                        if resp.status_code == 200:
+                            return Image.open(io.BytesIO(resp.content))
+                    except Exception:
+                        pass
+                    return self.empty_tile_image
+
+                def _patched_update_canvas_tile_images(self):
+                    while len(self.image_load_queue_results) > 0 and self.running:
+                        result = self.image_load_queue_results.pop(0)
+                        zoom, x, y = result[0][0], result[0][1], result[0][2]
+                        canvas_tile = result[1]
+                        image = result[2]
+
+                        if isinstance(image, Image.Image):
+                            try:
+                                image_tk = ImageTk.PhotoImage(image)
+                                self.tile_image_cache[f"{zoom}{x}{y}"] = image_tk
+                                image = image_tk
+                            except Exception:
+                                image = self.empty_tile_image
+
+                        if zoom == round(self.zoom):
+                            canvas_tile.set_image(image)
+
+                    if self.running:
+                        self.after(10, self.update_canvas_tile_images)
+
+                tkintermapview.TkinterMapView.request_image = _patched_request_image
+                tkintermapview.TkinterMapView.update_canvas_tile_images = _patched_update_canvas_tile_images
+                tkintermapview.TkinterMapView._photoimage_thread_patched = True
+
             self.map_widget = tkintermapview.TkinterMapView(self.right_sidebar, width=310, height=250, corner_radius=6)
             self.map_widget.pack(padx=14, pady=2)
             self.map_widget.set_tile_server("https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22)
@@ -1621,8 +1662,9 @@ class SonnetApp(ctk.CTk):
     # ==========================================
     # TELEMETRY & GPS MAPPING
     # ==========================================
-    def load_gps(self):
-        file_path = filedialog.askopenfilename(filetypes=[("GPS Telemetry", "*.csv *.txt"), ("All Files", "*.*")])
+    def load_gps(self, file_path=None):
+        if not file_path:
+            file_path = filedialog.askopenfilename(filetypes=[("GPS Telemetry", "*.csv *.txt"), ("All Files", "*.*")])
         if not file_path:
             return
 
@@ -1636,8 +1678,12 @@ class SonnetApp(ctk.CTk):
             self.lbl_gps_status.configure(text=f"GPS: {len(self.gps_data)} Points Loaded", text_color="#51cf66")
 
             if hasattr(self, 'map_overlay'):
-                self.map_overlay.destroy()
-                delattr(self, 'map_overlay')
+                try:
+                    self.map_overlay.destroy()
+                except Exception:
+                    pass
+                if hasattr(self, 'map_overlay'):
+                    delattr(self, 'map_overlay')
 
             if hasattr(self, 'map_widget'):
                 path_coords = []
@@ -1650,24 +1696,33 @@ class SonnetApp(ctk.CTk):
                     except Exception:
                         pass
 
-                if path_coords:
+                if len(path_coords) >= 2:
                     self.map_widget.set_path(path_coords)
                     self.map_widget.set_position(path_coords[0][0], path_coords[0][1])
                     self.map_widget.set_zoom(15)
+                elif len(path_coords) == 1:
+                    self.map_widget.set_position(path_coords[0][0], path_coords[0][1])
+                    self.map_widget.set_zoom(15)
+                    loc_name = self.gps_data[0].get("location_name", "Survey Site")
+                    self.map_widget.set_marker(path_coords[0][0], path_coords[0][1], text=loc_name)
+
+            self.sync_telemetry_for_frame(0)
 
         except Exception as e:
             self.lbl_gps_status.configure(text="GPS: File Read Error", text_color="#fa5252")
 
     def sync_telemetry_for_frame(self, frame_idx):
-        if self.gps_data and frame_idx < len(self.gps_data):
-            row = self.gps_data[frame_idx]
-            lat = row.get("latitude", row.get("lat", "--"))
-            lon = row.get("longitude", row.get("lon", "--"))
-            depth = row.get("depth", row.get("alt", "--"))
-            self.current_lat = lat
-            self.current_lon = lon
-            self.current_depth = depth
-            self.after(0, lambda l=lat, lo=lon, d=depth: self.update_nav(l, lo, d))
+        if not self.gps_data:
+            return
+        idx = min(frame_idx, len(self.gps_data) - 1)
+        row = self.gps_data[idx]
+        lat = row.get("latitude", row.get("lat", "--"))
+        lon = row.get("longitude", row.get("lon", "--"))
+        depth = row.get("depth", row.get("alt", "--"))
+        self.current_lat = lat
+        self.current_lon = lon
+        self.current_depth = depth
+        self.after(0, lambda l=lat, lo=lon, d=depth: self.update_nav(l, lo, d))
 
     def update_nav(self, lat, lon, depth):
         self.lbl_lat.configure(text=f"Lat:   {lat}")
