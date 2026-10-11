@@ -751,6 +751,18 @@ class SonnetApp(ctk.CTk):
 
     def toggle_audio_alerts(self):
         self.audio_alerts_enabled = bool(self.switch_audio.get())
+        if self.audio_alerts_enabled:
+            self.play_sound("action_confirm")
+
+    def play_sound(self, name):
+        if not self.audio_alerts_enabled:
+            return
+        filepath = os.path.join("assets", "sounds", f"{name}.wav")
+        if os.path.exists(filepath):
+            try:
+                winsound.PlaySound(os.path.abspath(filepath), winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception:
+                pass
 
     def apply_dsp_filters(self, bgr_frame):
         processed = bgr_frame
@@ -842,18 +854,21 @@ class SonnetApp(ctk.CTk):
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         self.set_status("🟢 MEDIA LOADED", "#51cf66", "#1a2e22")
+        self.play_sound("sonar_ping")
 
     def toggle_play(self):
         if not self.media_path:
             return
 
         if self.is_image:
+            self.play_sound("sonar_ping")
             threading.Thread(target=self.process_image, daemon=True).start()
         elif self.is_xtf:
             if not self.is_playing:
                 self.is_playing = True
                 self.btn_play.configure(text="⏸ PAUSE XTF", fg_color="#c92a2a")
                 self.set_status("🔵 STREAMING XTF", "#339af0", "#18283b")
+                self.play_sound("sonar_ping")
                 threading.Thread(target=self.play_xtf_loop, daemon=True).start()
             else:
                 self.is_playing = False
@@ -865,6 +880,7 @@ class SonnetApp(ctk.CTk):
                 self.stop_requested = False
                 self.btn_play.configure(text="⏸ PAUSE", fg_color="#c92a2a")
                 self.set_status("🔵 SCANNING", "#339af0", "#18283b")
+                self.play_sound("sonar_ping")
 
                 if self.cap is None or not self.cap.isOpened():
                     self.cap = cv2.VideoCapture(self.media_path)
@@ -1195,12 +1211,14 @@ class SonnetApp(ctk.CTk):
         # Visual alert
         self.after(0, lambda name=cls_name: self.set_status(f"🚨 DETECTED: {name.upper()}", "#ff6b6b", "#3b1818"))
 
-        # Audio alert for high-risk targets
+        # Audio alert: high-consequence threat vs tactical contact chirp
         now = time.time()
-        if self.audio_alerts_enabled and (now - self.last_alert_time > 1.5):
+        if self.audio_alerts_enabled and (now - self.last_alert_time > 0.8):
             self.last_alert_time = now
-            if cls_name in ["mine_cylinder", "shipwreck"]:
-                threading.Thread(target=lambda: winsound.Beep(980, 160), daemon=True).start()
+            if cls_name == "mine_cylinder":
+                self.play_sound("threat_alarm")
+            else:
+                self.play_sound("target_lock")
 
     def insert_tree_row(self, record):
         if self.matches_filter(record):
@@ -1304,6 +1322,7 @@ class SonnetApp(ctk.CTk):
         if record:
             record["status"] = choice
             self.repopulate_tree()
+            self.play_sound("action_confirm")
 
     def save_operator_notes(self):
         if not self.selected_target_id:
@@ -1314,6 +1333,7 @@ class SonnetApp(ctk.CTk):
             record["status"] = self.seg_verify.get()
             self.repopulate_tree()
             self.btn_save_note.configure(text="✅ Notes Saved!", fg_color="#2b8a3e")
+            self.play_sound("action_confirm")
             self.after(2000, lambda: self.btn_save_note.configure(text="💾 Save Notes & Status", fg_color="#343a40"))
 
     def open_selected_snapshot(self):
@@ -1499,6 +1519,7 @@ class SonnetApp(ctk.CTk):
                 y -= 130
 
             c.save()
+            self.play_sound("export_complete")
             self.btn_report.configure(text="✅ PDF SAVED", fg_color="#2b8a3e")
             self.after(3000, lambda: self.btn_report.configure(text="📄 PDF", fg_color="#1c7ed6"))
             os.startfile(os.path.abspath(filename))
@@ -1520,6 +1541,7 @@ class SonnetApp(ctk.CTk):
                 for r in self.target_records.values():
                     writer.writerow([r['id'], r['class'], f"{r['conf']:.4f}", r.get('status', ''), r.get('notes', ''), r['time_frame'], r['lat'], r['lon'], r['depth'], r['timestamp'], r['snapshot']])
 
+            self.play_sound("export_complete")
             self.btn_export_csv.configure(text="✅ CSV SAVED", fg_color="#2b8a3e")
             self.after(3000, lambda: self.btn_export_csv.configure(text="📊 CSV", fg_color="#343a40"))
             os.startfile(os.path.abspath(csv_path))
@@ -1570,6 +1592,7 @@ class SonnetApp(ctk.CTk):
             with open(geojson_path, 'w', encoding='utf-8') as f:
                 json.dump(geojson_doc, f, indent=2)
 
+            self.play_sound("export_complete")
             self.btn_export_geojson.configure(text="✅ GEOJSON", fg_color="#2b8a3e")
             self.after(3000, lambda: self.btn_export_geojson.configure(text="🌐 GEOJSON", fg_color="#343a40"))
             os.startfile(os.path.abspath(geojson_path))
