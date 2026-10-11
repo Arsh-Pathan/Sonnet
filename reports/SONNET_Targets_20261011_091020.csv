@@ -1,0 +1,9 @@
+Track ID,Class,Confidence,Time/Frame,Latitude,Longitude,Depth (m),Logged Time,Snapshot File
+TRK-001,crab_pot,0.3591,F-5,--,--,--,09:09:03,snapshots\TRK-001_crab_pot.jpg
+TRK-002,shipwreck,0.3630,F-12,--,--,--,09:09:04,snapshots\TRK-002_shipwreck.jpg
+TRK-003,crab_pot,0.2946,F-68,--,--,--,09:09:11,snapshots\TRK-003_crab_pot.jpg
+TRK-004,crab_pot,0.2516,F-69,--,--,--,09:09:12,snapshots\TRK-004_crab_pot.jpg
+TRK-005,crab_pot,0.3118,F-70,--,--,--,09:09:12,snapshots\TRK-005_crab_pot.jpg
+TRK-006,ghost_net,0.2702,F-90,--,--,--,09:09:15,snapshots\TRK-006_ghost_net.jpg
+TRK-007,crab_pot,0.2833,F-93,--,--,--,09:09:15,snapshots\TRK-007_crab_pot.jpg
+TRK-008,crab_pot,0.2600,F-103,--,--,--,09:09:16,snapshots\TRK-008_crab_pot.jpg
