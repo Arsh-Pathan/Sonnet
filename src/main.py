@@ -960,14 +960,17 @@ class SonnetApp(ctk.CTk):
             try:
                 (fh, p) = pyxtf.xtf_read(self.media_path)
                 packets = p[pyxtf.XTFHeaderType.sonar]
-                if packets and len(packets[0].data) >= 2:
-                    p0 = np.asarray(packets[0].data[0], dtype=float)[::-1]
-                    s0 = np.asarray(packets[0].data[1], dtype=float)
-                    if len(p0) > 0 and len(s0) > 0:
-                        init_ping = np.concatenate([p0, s0])
+                if packets and len(packets) > 0:
+                    init_chunk = packets[:min(500, len(packets))]
+                    init_frame, init_ping = self.render_xtf_chunk(init_chunk)
+                    if init_frame is not None:
+                        h, w = init_frame.shape[:2]
+                        self.lbl_resolution.configure(text=f"{w}x{h}")
+                        self.display_frame(self.apply_dsp_filters(init_frame))
+                    if init_ping is not None:
                         self.update_ascan(init_ping)
-            except Exception:
-                pass
+            except Exception as e:
+                print("Initial XTF load error:", e)
         else:
             self.is_image = False
             self.is_xtf = False
@@ -1169,6 +1172,51 @@ class SonnetApp(ctk.CTk):
             self.after(0, lambda: self.btn_play.configure(text="▶ PLAY", fg_color="#2b8a3e"))
             self.after(0, lambda: self.set_status("🟢 END OF MEDIA", "#51cf66", "#1a2e22"))
 
+    def render_xtf_chunk(self, chunk):
+        port_data, stbd_data = [], []
+        for packet in chunk:
+            if len(packet.data) >= 2:
+                port_data.append(packet.data[0])
+                stbd_data.append(packet.data[1])
+
+        if not port_data:
+            return None, None
+
+        port_img = np.vstack(port_data)
+        stbd_img = np.vstack(stbd_data)
+
+        # Flip port channel: left-right for nadir at center, up-down so along-track matches starboard
+        port_img = np.fliplr(port_img)
+        port_img = np.flipud(port_img)
+
+        # Smooth port channel to reduce grain and match starboard quality
+        port_f = port_img.astype(np.float32)
+        port_f = cv2.GaussianBlur(port_f, (3, 3), 0)
+
+        stbd_f = stbd_img.astype(np.float32)
+
+        # Independent per-channel percentile normalization for balanced contrast
+        for ch in (port_f, stbd_f):
+            lo, hi = np.percentile(ch, (2, 98))
+            if hi > lo:
+                ch[:] = np.clip((ch - lo) / (hi - lo), 0, 1)
+            else:
+                ch[:] = 0
+
+        combined = np.hstack((port_f, stbd_f))
+        combined = (np.clip(combined, 0, 1) * 255).astype(np.uint8)
+        bgr_frame = cv2.cvtColor(combined, cv2.COLOR_GRAY2BGR)
+
+        # Real acoustic A-Scan slice
+        ascan_slice = None
+        last_pkt = chunk[-1]
+        if len(last_pkt.data) >= 2 and len(last_pkt.data[0]) > 0 and len(last_pkt.data[1]) > 0:
+            raw_port = np.asarray(last_pkt.data[0], dtype=float)[::-1]
+            raw_stbd = np.asarray(last_pkt.data[1], dtype=float)
+            ascan_slice = np.concatenate([raw_port, raw_stbd])
+
+        return bgr_frame, ascan_slice
+
     def play_xtf_loop(self):
         try:
             (fh, p) = pyxtf.xtf_read(self.media_path)
@@ -1188,34 +1236,12 @@ class SonnetApp(ctk.CTk):
                     break
 
                 chunk = sonar_packets[i:i + frame_size]
-                port_data, stbd_data = [], []
-                for packet in chunk:
-                    if len(packet.data) >= 2:
-                        port_data.append(packet.data[0])
-                        stbd_data.append(packet.data[1])
-
-                if not port_data:
+                bgr_frame, ascan_slice = self.render_xtf_chunk(chunk)
+                if bgr_frame is None:
                     continue
 
-                port_img = np.vstack(port_data)
-                stbd_img = np.vstack(stbd_data)
-                port_img = np.fliplr(port_img)
-                combined = np.hstack((port_img, stbd_img)).astype(np.float32)
-
-                # Real acoustic A-Scan from latest ping packet in chunk
-                last_pkt = chunk[-1]
-                if len(last_pkt.data) >= 2 and len(last_pkt.data[0]) > 0 and len(last_pkt.data[1]) > 0:
-                    raw_port = np.asarray(last_pkt.data[0], dtype=float)[::-1]
-                    raw_stbd = np.asarray(last_pkt.data[1], dtype=float)
-                    ascan_slice = np.concatenate([raw_port, raw_stbd])
+                if ascan_slice is not None:
                     self.after(0, lambda s=ascan_slice: self.update_ascan(s))
-
-                p2, p98 = np.percentile(combined, (2, 98))
-                if p98 > p2:
-                    combined = np.clip((combined - p2) / (p98 - p2), 0, 1)
-                combined = (combined * 255).astype(np.uint8)
-
-                bgr_frame = cv2.cvtColor(combined, cv2.COLOR_GRAY2BGR)
                 self.frames_processed += 1
                 conf = self.conf_slider.get()
                 iou = self.iou_slider.get()
