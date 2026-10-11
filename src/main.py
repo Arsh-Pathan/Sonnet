@@ -561,6 +561,17 @@ class SonnetApp(ctk.CTk):
             # Patch tkintermapview for Python 3.12+ / 3.14 thread-safe PhotoImage creation
             if not getattr(tkintermapview.TkinterMapView, "_photoimage_thread_patched", False):
                 def _patched_request_image(self, zoom: int, x: int, y: int, db_cursor=None):
+                    # 1. Check offline tile database first
+                    if db_cursor is not None:
+                        try:
+                            db_cursor.execute("SELECT tile_image FROM tiles WHERE zoom=? AND x=? AND y=?;", (zoom, x, y))
+                            row = db_cursor.fetchone()
+                            if row and row[0]:
+                                return Image.open(io.BytesIO(row[0]))
+                        except Exception:
+                            pass
+
+                    # 2. Online fetch with robust fallback hierarchy
                     urls = [
                         self.tile_server.replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(zoom)),
                         f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y}/{x}",
@@ -572,6 +583,15 @@ class SonnetApp(ctk.CTk):
                         try:
                             resp = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=4)
                             if resp.status_code == 200 and len(resp.content) > 100:
+                                # Cache newly fetched tile in offline database
+                                if db_cursor is not None:
+                                    try:
+                                        db_cursor.execute(
+                                            "INSERT OR REPLACE INTO tiles (zoom, x, y, server, tile_image) VALUES (?, ?, ?, ?, ?)",
+                                            (zoom, x, y, self.tile_server, resp.content)
+                                        )
+                                    except Exception:
+                                        pass
                                 image = Image.open(io.BytesIO(resp.content))
                                 return image
                         except Exception:
@@ -603,7 +623,20 @@ class SonnetApp(ctk.CTk):
                 tkintermapview.TkinterMapView.update_canvas_tile_images = _patched_update_canvas_tile_images
                 tkintermapview.TkinterMapView._photoimage_thread_patched = True
 
-            self.map_widget = tkintermapview.TkinterMapView(self.right_sidebar, width=310, height=250, corner_radius=6)
+            # Use local offline map database if present
+            db_candidates = [
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "offline_tiles.db"),
+                os.path.join("assets", "offline_tiles.db"),
+            ]
+            db_path = next((os.path.abspath(p) for p in db_candidates if os.path.exists(p)), None)
+
+            self.map_widget = tkintermapview.TkinterMapView(
+                self.right_sidebar,
+                width=310,
+                height=250,
+                corner_radius=6,
+                database_path=db_path
+            )
             self.map_widget.pack(padx=14, pady=2)
             self.map_widget.set_tile_server("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", max_zoom=19)
             self.map_widget.set_position(0, 0)

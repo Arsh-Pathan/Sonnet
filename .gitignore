@@ -53,3 +53,5 @@ marine_sonar_yolo11s_artifacts.zip
 *.avi
 *.xtf
 *.XTF
+*.db-journal
+
