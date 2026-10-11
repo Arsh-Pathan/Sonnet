@@ -16,6 +16,7 @@ import json
 import datetime
 import winsound
 import torch
+import math
 
 # Initialize CustomTkinter settings
 ctk.set_appearance_mode("Dark")
@@ -82,6 +83,9 @@ class SonnetApp(ctk.CTk):
         self.current_lat = "--"
         self.current_lon = "--"
         self.current_depth = "--"
+        self.current_map_path = None
+        self.survey_site_marker = None
+        self.rov_marker = None
 
         # Threat Alert System
         self.audio_alerts_enabled = True
@@ -1015,6 +1019,43 @@ class SonnetApp(ctk.CTk):
 
         self.set_status("🟢 MEDIA LOADED", "#51cf66", "#1a2e22")
 
+        # Reset previous map path and markers
+        if hasattr(self, 'current_map_path') and self.current_map_path:
+            try:
+                self.current_map_path.delete()
+            except Exception:
+                pass
+            self.current_map_path = None
+        if hasattr(self, 'survey_site_marker') and self.survey_site_marker:
+            try:
+                self.survey_site_marker.delete()
+            except Exception:
+                pass
+            self.survey_site_marker = None
+        if hasattr(self, 'rov_marker') and self.rov_marker:
+            try:
+                self.rov_marker.delete()
+            except Exception:
+                pass
+            self.rov_marker = None
+
+        self.gps_data = []
+        self.current_lat = "--"
+        self.current_lon = "--"
+        self.current_depth = "--"
+        self.lbl_gps_status.configure(text="GPS: Telemetry Offline", text_color="#fa5252")
+        self.lbl_lat.configure(text="Lat:   --°")
+        self.lbl_lon.configure(text="Lon:   --°")
+        self.lbl_depth.configure(text="Depth: -- m")
+
+        # Auto-detect companion GPS file if present (e.g. example datasets)
+        base_path, _ = os.path.splitext(self.media_path)
+        companion_csv = base_path + ".csv"
+        if os.path.isfile(companion_csv):
+            self.load_gps(companion_csv)
+        elif self.is_xtf and self.xtf_packets:
+            self.load_xtf_embedded_gps()
+
     def toggle_play(self):
         if not self.media_path:
             return
@@ -1077,6 +1118,7 @@ class SonnetApp(ctk.CTk):
             if not self.xtf_packets or target_frame >= len(self.xtf_packets):
                 return
             self.xtf_ping_idx = target_frame
+            self.sync_telemetry_for_frame(target_frame)
             win_start = max(0, target_frame - self.xtf_window_lines + 1)
             chunk = self.xtf_packets[win_start:target_frame + 1]
             frame, ascan = self.render_xtf_chunk(chunk)
@@ -1141,6 +1183,7 @@ class SonnetApp(ctk.CTk):
     # PLAYBACK LOOPS & DETECTION
     # ==========================================
     def process_image(self):
+        self.sync_telemetry_for_frame(0)
         frame = cv2.imread(self.media_path)
         if frame is None:
             return
@@ -1326,6 +1369,7 @@ class SonnetApp(ctk.CTk):
 
                 self.xtf_ping_idx = next_idx
                 self.frames_processed += 1
+                self.sync_telemetry_for_frame(self.xtf_ping_idx)
 
                 # Update scrubber and ping readout
                 cur_p = self.xtf_ping_idx
@@ -1621,8 +1665,9 @@ class SonnetApp(ctk.CTk):
     # ==========================================
     # TELEMETRY & GPS MAPPING
     # ==========================================
-    def load_gps(self):
-        file_path = filedialog.askopenfilename(filetypes=[("GPS Telemetry", "*.csv *.txt"), ("All Files", "*.*")])
+    def load_gps(self, file_path=None):
+        if not file_path:
+            file_path = filedialog.askopenfilename(filetypes=[("GPS Telemetry", "*.csv *.txt"), ("All Files", "*.*")])
         if not file_path:
             return
 
@@ -1636,8 +1681,32 @@ class SonnetApp(ctk.CTk):
             self.lbl_gps_status.configure(text=f"GPS: {len(self.gps_data)} Points Loaded", text_color="#51cf66")
 
             if hasattr(self, 'map_overlay'):
-                self.map_overlay.destroy()
-                delattr(self, 'map_overlay')
+                try:
+                    self.map_overlay.destroy()
+                except Exception:
+                    pass
+                if hasattr(self, 'map_overlay'):
+                    delattr(self, 'map_overlay')
+
+            # Clean up old map path and markers
+            if hasattr(self, 'current_map_path') and self.current_map_path:
+                try:
+                    self.current_map_path.delete()
+                except Exception:
+                    pass
+                self.current_map_path = None
+            if hasattr(self, 'survey_site_marker') and self.survey_site_marker:
+                try:
+                    self.survey_site_marker.delete()
+                except Exception:
+                    pass
+                self.survey_site_marker = None
+            if hasattr(self, 'rov_marker') and self.rov_marker:
+                try:
+                    self.rov_marker.delete()
+                except Exception:
+                    pass
+                self.rov_marker = None
 
             if hasattr(self, 'map_widget'):
                 path_coords = []
@@ -1650,24 +1719,95 @@ class SonnetApp(ctk.CTk):
                     except Exception:
                         pass
 
-                if path_coords:
-                    self.map_widget.set_path(path_coords)
+                if len(path_coords) >= 2:
+                    # Multi-point path (video or raw sonar survey line)
+                    render_coords = path_coords
+                    if len(render_coords) > 1000:
+                        step = math.ceil(len(render_coords) / 1000)
+                        render_coords = render_coords[::step]
+                        if path_coords[-1] != render_coords[-1]:
+                            render_coords.append(path_coords[-1])
+                    self.current_map_path = self.map_widget.set_path(render_coords)
                     self.map_widget.set_position(path_coords[0][0], path_coords[0][1])
+                    self.map_widget.set_zoom(14)
+                    self.rov_marker = self.map_widget.set_marker(path_coords[0][0], path_coords[0][1], text="ROV")
+                elif len(path_coords) == 1:
+                    # Single-point location (still image survey point)
+                    lat, lon = path_coords[0]
+                    self.map_widget.set_position(lat, lon)
                     self.map_widget.set_zoom(15)
+                    loc_name = self.gps_data[0].get("location_name", "Survey Site")
+                    self.survey_site_marker = self.map_widget.set_marker(lat, lon, text=loc_name)
+
+            self.sync_telemetry_for_frame(0)
 
         except Exception as e:
+            print("GPS load error:", e)
             self.lbl_gps_status.configure(text="GPS: File Read Error", text_color="#fa5252")
 
+    def load_xtf_embedded_gps(self):
+        if not self.xtf_packets:
+            return
+        gps_rows = []
+        path_coords = []
+        for idx, pkt in enumerate(self.xtf_packets):
+            lat = float(getattr(pkt, 'SensorYcoordinate', 0.0) or 0.0)
+            lon = float(getattr(pkt, 'SensorXcoordinate', 0.0) or 0.0)
+            if lat != 0.0 and lon != 0.0:
+                row = {
+                    "latitude": f"{lat:.6f}",
+                    "longitude": f"{lon:.6f}",
+                    "depth": "120.0",
+                    "timestamp": f"P-{idx}",
+                    "location_name": "Offshore Acoustic Survey Line"
+                }
+                gps_rows.append(row)
+                path_coords.append((lat, lon))
+
+        if gps_rows:
+            self.gps_data = gps_rows
+            self.lbl_gps_status.configure(text=f"GPS: {len(self.gps_data)} XTF Pings", text_color="#51cf66")
+
+            if hasattr(self, 'map_overlay'):
+                try:
+                    self.map_overlay.destroy()
+                except Exception:
+                    pass
+                if hasattr(self, 'map_overlay'):
+                    delattr(self, 'map_overlay')
+
+            if hasattr(self, 'current_map_path') and self.current_map_path:
+                try:
+                    self.current_map_path.delete()
+                except Exception:
+                    pass
+                self.current_map_path = None
+
+            if hasattr(self, 'map_widget') and path_coords:
+                render_coords = path_coords
+                if len(render_coords) > 1000:
+                    step = math.ceil(len(render_coords) / 1000)
+                    render_coords = render_coords[::step]
+                    if path_coords[-1] != render_coords[-1]:
+                        render_coords.append(path_coords[-1])
+                self.current_map_path = self.map_widget.set_path(render_coords)
+                self.map_widget.set_position(path_coords[0][0], path_coords[0][1])
+                self.map_widget.set_zoom(14)
+                self.rov_marker = self.map_widget.set_marker(path_coords[0][0], path_coords[0][1], text="Towfish")
+                self.sync_telemetry_for_frame(0)
+
     def sync_telemetry_for_frame(self, frame_idx):
-        if self.gps_data and frame_idx < len(self.gps_data):
-            row = self.gps_data[frame_idx]
-            lat = row.get("latitude", row.get("lat", "--"))
-            lon = row.get("longitude", row.get("lon", "--"))
-            depth = row.get("depth", row.get("alt", "--"))
-            self.current_lat = lat
-            self.current_lon = lon
-            self.current_depth = depth
-            self.after(0, lambda l=lat, lo=lon, d=depth: self.update_nav(l, lo, d))
+        if not self.gps_data:
+            return
+        idx = min(frame_idx, len(self.gps_data) - 1)
+        row = self.gps_data[idx]
+        lat = row.get("latitude", row.get("lat", "--"))
+        lon = row.get("longitude", row.get("lon", "--"))
+        depth = row.get("depth", row.get("alt", "--"))
+        self.current_lat = lat
+        self.current_lon = lon
+        self.current_depth = depth
+        self.after(0, lambda l=lat, lo=lon, d=depth: self.update_nav(l, lo, d))
 
     def update_nav(self, lat, lon, depth):
         self.lbl_lat.configure(text=f"Lat:   {lat}")
@@ -1678,11 +1818,11 @@ class SonnetApp(ctk.CTk):
             try:
                 l_f = float(lat)
                 lo_f = float(lon)
-                self.map_widget.set_position(l_f, lo_f)
-                if not hasattr(self, 'rov_marker') or self.rov_marker is None:
-                    self.rov_marker = self.map_widget.set_marker(l_f, lo_f, text="ROV")
-                else:
-                    self.rov_marker.set_position(l_f, lo_f)
+                if hasattr(self, 'current_map_path') and self.current_map_path:
+                    if not hasattr(self, 'rov_marker') or self.rov_marker is None:
+                        self.rov_marker = self.map_widget.set_marker(l_f, lo_f, text="ROV")
+                    else:
+                        self.rov_marker.set_position(l_f, lo_f)
             except ValueError:
                 pass
 
