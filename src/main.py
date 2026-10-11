@@ -13,31 +13,37 @@ import numpy as np
 import csv
 import json
 import datetime
+import winsound
+import torch
 
-# Initialize CustomTkinter
+# Initialize CustomTkinter settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
-
-# Load YOLO model
-model_path = "models/sonar_yolo11s_balanced_v1_best.pt"
-try:
-    model = YOLO(model_path)
-except Exception as e:
-    model = None
-    print("Model load error:", e)
 
 
 class SonnetApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("SONNET - Sonar Target Detection & Acoustic Intelligence")
-        self.geometry("1380x880")
-        self.minsize(1200, 750)
+        self.title("SONNET - Sonar Target Detection & Acoustic Intelligence Workstation")
+        self.geometry("1420x900")
+        self.minsize(1240, 780)
+        self.is_fullscreen = False
+
         try:
             self.iconbitmap("assets/icon.ico")
         except Exception:
             pass
+
+        # Compute Hardware Detection
+        self.has_cuda = torch.cuda.is_available()
+        self.device_name = torch.cuda.get_device_name(0) if self.has_cuda else "CPU (Optimized)"
+
+        # Model Management
+        self.model = None
+        self.available_models = self.discover_models()
+        self.current_model_path = "models/sonar_yolo11s_balanced_v1_best.pt"
+        self.load_active_model(self.current_model_path)
 
         # Media & Playback State
         self.media_path = None
@@ -49,9 +55,15 @@ class SonnetApp(ctk.CTk):
         self.current_frame_idx = 0
         self.video_fps = 25.0
         self.playback_speed = 1.0
-        self.active_colormap = "Default"
         self.stop_requested = False
         self.play_thread = None
+
+        # DSP & Visual Enhancement
+        self.active_colormap = "Default"
+        self.clahe_enabled = False
+        self.clahe_clip = 2.0
+        self.contrast_factor = 1.0
+        self.brightness_offset = 0
 
         # Telemetry State
         self.gps_data = []
@@ -59,11 +71,16 @@ class SonnetApp(ctk.CTk):
         self.current_lon = "--"
         self.current_depth = "--"
 
+        # Threat Alert System
+        self.audio_alerts_enabled = True
+        self.last_alert_time = 0
+
         # Analytics & Target Records
         self.stats = {"pipeline": 0, "shipwreck": 0, "mine_cylinder": 0, "ghost_net": 0, "crab_pot": 0}
-        self.target_records = {}  # {display_id: {data}}
+        self.target_records = {}  # {display_id: dict}
         self.target_counter = 0
-        self.map_markers = []
+        self.selected_target_id = None
+        self.log_filter = "All Targets"
 
         # Directories
         self.snapshots_dir = "snapshots"
@@ -79,17 +96,56 @@ class SonnetApp(ctk.CTk):
         self.custom_tracker = []
         self.global_id_counter = 0
 
-        # Build UI
+        # Build UI & Bindings
         self.setup_ui()
+        self.setup_keybindings()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def discover_models(self):
+        models = {}
+        for search_dir in ["models", "weights"]:
+            if os.path.exists(search_dir):
+                for f in os.listdir(search_dir):
+                    if f.endswith(".pt"):
+                        full_p = os.path.join(search_dir, f)
+                        models[f] = full_p
+        if not models:
+            models["sonar_yolo11s_best.pt"] = "models/sonar_yolo11s_balanced_v1_best.pt"
+        return models
+
+    def load_active_model(self, model_path):
+        try:
+            if os.path.exists(model_path):
+                self.model = YOLO(model_path)
+                self.current_model_path = model_path
+            else:
+                self.model = None
+        except Exception as e:
+            self.model = None
+            print("Model load error:", e)
+
+    def setup_keybindings(self):
+        self.bind("<space>", lambda e: self.toggle_play())
+        self.bind("<Left>", lambda e: self.step_backward())
+        self.bind("<Right>", lambda e: self.step_forward())
+        self.bind("<F11>", lambda e: self.toggle_fullscreen())
+
+    def toggle_fullscreen(self):
+        self.is_fullscreen = not self.is_fullscreen
+        self.attributes("-fullscreen", self.is_fullscreen)
+        if hasattr(self, 'btn_fullscreen'):
+            self.btn_fullscreen.configure(text="⛶ EXIT FULLSCREEN" if self.is_fullscreen else "⛶ FULLSCREEN")
+
+    # ==========================================
+    # UI SETUP
+    # ==========================================
     def setup_ui(self):
         self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(1, weight=1)
 
-        # ==========================================
+        # ------------------------------------------
         # TOP BAR
-        # ==========================================
+        # ------------------------------------------
         self.topbar = ctk.CTkFrame(self, height=54, corner_radius=0, fg_color="#18191d")
         self.topbar.grid(row=0, column=0, columnspan=3, sticky="ew")
 
@@ -116,7 +172,7 @@ class SonnetApp(ctk.CTk):
             )
         self.lbl_logo.pack(side="left", padx=16, pady=10)
 
-        # Live Status Pill
+        # Status Pill
         self.status_pill = ctk.CTkLabel(
             self.topbar,
             text="🟢 STANDBY",
@@ -129,30 +185,44 @@ class SonnetApp(ctk.CTk):
         )
         self.status_pill.pack(side="left", padx=10)
 
+        # Compute Hardware Pill
+        hw_color = "#339af0" if self.has_cuda else "#868e96"
+        self.lbl_hw_badge = ctk.CTkLabel(
+            self.topbar,
+            text=f"⚙ {self.device_name}",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=hw_color,
+            fg_color="#1e2227",
+            corner_radius=6,
+            padx=8,
+            pady=3
+        )
+        self.lbl_hw_badge.pack(side="left", padx=6)
+
         # Top Bar Action Buttons
         self.btn_snapshots = ctk.CTkButton(
             self.topbar,
-            text="🖼️ SNAPSHOTS",
-            width=125,
+            text="🖼️ GALLERY",
+            width=100,
             height=32,
             command=self.open_snapshots,
             fg_color="#b85c14",
             hover_color="#d97a32",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.btn_snapshots.pack(side="left", padx=10)
+        self.btn_snapshots.pack(side="left", padx=6)
 
         self.btn_report = ctk.CTkButton(
             self.topbar,
-            text="📄 EXPORT PDF",
-            width=120,
+            text="📄 PDF",
+            width=75,
             height=32,
             command=self.generate_report,
             fg_color="#1c7ed6",
             hover_color="#1864ab",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.btn_report.pack(side="left", padx=6)
+        self.btn_report.pack(side="left", padx=4)
 
         self.btn_export_csv = ctk.CTkButton(
             self.topbar,
@@ -169,7 +239,7 @@ class SonnetApp(ctk.CTk):
         self.btn_export_geojson = ctk.CTkButton(
             self.topbar,
             text="🌐 GEOJSON",
-            width=90,
+            width=85,
             height=32,
             command=self.export_geojson,
             fg_color="#343a40",
@@ -178,78 +248,135 @@ class SonnetApp(ctk.CTk):
         )
         self.btn_export_geojson.pack(side="left", padx=4)
 
-        # Right-aligned media loading buttons
+        # Audio Alert Switch
+        self.switch_audio = ctk.CTkSwitch(
+            self.topbar,
+            text="🔊 Alerts",
+            command=self.toggle_audio_alerts,
+            font=ctk.CTkFont(size=11),
+            text_color="#adb5bd",
+            progress_color="#e03131"
+        )
+        self.switch_audio.select()
+        self.switch_audio.pack(side="left", padx=10)
+
+        # Right-aligned Buttons
+        self.btn_fullscreen = ctk.CTkButton(
+            self.topbar,
+            text="⛶ FULLSCREEN",
+            width=105,
+            height=32,
+            command=self.toggle_fullscreen,
+            fg_color="#343a40",
+            hover_color="#495057",
+            font=ctk.CTkFont(size=11)
+        )
+        self.btn_fullscreen.pack(side="right", padx=12)
+
         self.btn_load_gps = ctk.CTkButton(
             self.topbar,
             text="📡 LOAD GPS",
-            width=105,
+            width=100,
             height=32,
             command=self.load_gps,
             fg_color="#495057",
             hover_color="#5c636a",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.btn_load_gps.pack(side="right", padx=12)
+        self.btn_load_gps.pack(side="right", padx=4)
 
         self.btn_load = ctk.CTkButton(
             self.topbar,
             text="📁 LOAD MEDIA",
-            width=120,
+            width=110,
             height=32,
             command=self.load_media,
             fg_color="#228be6",
             hover_color="#1c7ed6",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=11, weight="bold")
         )
-        self.btn_load.pack(side="right", padx=6)
+        self.btn_load.pack(side="right", padx=4)
 
-        # ==========================================
-        # LEFT SIDEBAR: CONTROLS & TELEMETRY
-        # ==========================================
-        self.left_sidebar = ctk.CTkScrollableFrame(self, width=260, corner_radius=0, fg_color="#121316")
+        # ------------------------------------------
+        # LEFT SIDEBAR: MODEL, DSP & TELEMETRY
+        # ------------------------------------------
+        self.left_sidebar = ctk.CTkScrollableFrame(self, width=270, corner_radius=0, fg_color="#121316")
         self.left_sidebar.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
 
-        # Section: AI Controls
+        # Active Model Selector
         ctk.CTkLabel(
             self.left_sidebar,
-            text="DETECTION MODEL",
+            text="ACTIVE YOLO MODEL",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#868e96"
         ).pack(anchor="w", padx=10, pady=(10, 4))
 
-        ctk.CTkLabel(self.left_sidebar, text="Confidence Threshold", text_color="#ced4da", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10)
+        model_names = list(self.available_models.keys())
+        default_model_name = os.path.basename(self.current_model_path)
+        if default_model_name not in model_names and model_names:
+            default_model_name = model_names[0]
+
+        self.model_menu = ctk.CTkOptionMenu(
+            self.left_sidebar,
+            values=model_names,
+            command=self.on_model_selected,
+            fg_color="#212529",
+            button_color="#343a40"
+        )
+        self.model_menu.set(default_model_name)
+        self.model_menu.pack(fill="x", padx=10, pady=2)
+
+        # Model Sensitivity
+        ctk.CTkLabel(self.left_sidebar, text="Confidence Threshold", text_color="#ced4da", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10, pady=(8, 0))
         self.conf_slider = ctk.CTkSlider(self.left_sidebar, from_=0.05, to=0.95, progress_color="#1c7ed6")
         self.conf_slider.set(0.25)
-        self.conf_slider.pack(fill="x", padx=10, pady=3)
+        self.conf_slider.pack(fill="x", padx=10, pady=2)
 
         ctk.CTkLabel(self.left_sidebar, text="IoU (NMS) Overlap", text_color="#ced4da", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10)
         self.iou_slider = ctk.CTkSlider(self.left_sidebar, from_=0.10, to=0.90, progress_color="#b85c14")
         self.iou_slider.set(0.45)
-        self.iou_slider.pack(fill="x", padx=10, pady=3)
+        self.iou_slider.pack(fill="x", padx=10, pady=2)
 
-        ctk.CTkLabel(self.left_sidebar, text="Max Targets Per Ping", text_color="#ced4da", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10)
-        self.max_det_slider = ctk.CTkSlider(self.left_sidebar, from_=5, to=200, progress_color="#b85c14")
-        self.max_det_slider.set(100)
-        self.max_det_slider.pack(fill="x", padx=10, pady=3)
-
-        # Section: Sonar Palettes / Visual Enhancement
+        # Section: Acoustic Signal Enhancement (DSP)
         ctk.CTkLabel(
             self.left_sidebar,
-            text="ACOUSTIC PALETTE",
+            text="ACOUSTIC SIGNAL ENHANCEMENT",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#868e96"
-        ).pack(anchor="w", padx=10, pady=(18, 4))
+        ).pack(anchor="w", padx=10, pady=(16, 4))
 
+        ctk.CTkLabel(self.left_sidebar, text="Acoustic Palette", text_color="#ced4da", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=10)
         self.cmap_menu = ctk.CTkOptionMenu(
             self.left_sidebar,
             values=["Default", "Thermal (Inferno)", "Ironbow (Jet)", "Ocean Blue", "Amber (Sepia)"],
             command=self.on_colormap_changed,
             fg_color="#212529",
-            button_color="#343a40",
-            button_hover_color="#495057"
+            button_color="#343a40"
         )
         self.cmap_menu.set("Default")
-        self.cmap_menu.pack(fill="x", padx=10, pady=4)
+        self.cmap_menu.pack(fill="x", padx=10, pady=2)
+
+        # CLAHE Adaptive Contrast Switch & Slider
+        self.switch_clahe = ctk.CTkSwitch(
+            self.left_sidebar,
+            text="CLAHE Adaptive Equalizer",
+            command=self.on_clahe_toggle,
+            font=ctk.CTkFont(size=11),
+            text_color="#ced4da",
+            progress_color="#2b8a3e"
+        )
+        self.switch_clahe.pack(anchor="w", padx=10, pady=(10, 4))
+
+        ctk.CTkLabel(self.left_sidebar, text="CLAHE Clip Limit", text_color="#ced4da", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=10)
+        self.clahe_slider = ctk.CTkSlider(self.left_sidebar, from_=1.0, to=5.0, command=self.on_clahe_clip_slide, progress_color="#2b8a3e")
+        self.clahe_slider.set(2.0)
+        self.clahe_slider.pack(fill="x", padx=10, pady=2)
+
+        # Gain & Brightness
+        ctk.CTkLabel(self.left_sidebar, text="Acoustic Gain (Contrast)", text_color="#ced4da", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=10, pady=(6, 0))
+        self.contrast_slider = ctk.CTkSlider(self.left_sidebar, from_=0.5, to=2.0, command=self.on_contrast_slide, progress_color="#1c7ed6")
+        self.contrast_slider.set(1.0)
+        self.contrast_slider.pack(fill="x", padx=10, pady=2)
 
         # Section: Telemetry Readout
         ctk.CTkLabel(
@@ -257,7 +384,7 @@ class SonnetApp(ctk.CTk):
             text="VESSEL TELEMETRY",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#868e96"
-        ).pack(anchor="w", padx=10, pady=(18, 4))
+        ).pack(anchor="w", padx=10, pady=(16, 4))
 
         self.telemetry_card = ctk.CTkFrame(self.left_sidebar, fg_color="#18191d", corner_radius=6)
         self.telemetry_card.pack(fill="x", padx=10, pady=4)
@@ -272,25 +399,9 @@ class SonnetApp(ctk.CTk):
         self.lbl_gps_status = ctk.CTkLabel(self.left_sidebar, text="GPS: Telemetry Offline", text_color="#fa5252", font=ctk.CTkFont(size=10))
         self.lbl_gps_status.pack(anchor="w", padx=10, pady=4)
 
-        # Section: System Info
-        ctk.CTkLabel(
-            self.left_sidebar,
-            text="MODEL SPECIFICATION",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#868e96"
-        ).pack(anchor="w", padx=10, pady=(18, 4))
-        self.lbl_model_info = ctk.CTkLabel(
-            self.left_sidebar,
-            text="Engine: YOLO11s Balanced\nWeights: sonar_yolo11s_best\nClasses: 5 Marine Targets",
-            text_color="#868e96",
-            justify="left",
-            font=ctk.CTkFont(size=10)
-        )
-        self.lbl_model_info.pack(anchor="w", padx=10, pady=2)
-
-        # ==========================================
+        # ------------------------------------------
         # CENTER VIEW: VIDEO / SONAR FEED + CONTROLS
-        # ==========================================
+        # ------------------------------------------
         self.center_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="#000000")
         self.center_frame.grid(row=1, column=1, sticky="nsew", padx=1, pady=1)
         self.center_frame.grid_rowconfigure(1, weight=1)
@@ -319,7 +430,7 @@ class SonnetApp(ctk.CTk):
         # Display Label for video frames
         self.lbl_video = ctk.CTkLabel(
             self.center_frame,
-            text="NO SIGNAL / NO MEDIA LOADED\n\nClick 'LOAD MEDIA' to begin sonar analysis",
+            text="NO SIGNAL / NO MEDIA LOADED\n\nClick 'LOAD MEDIA' or press Space to analyze",
             text_color="#495057",
             font=ctk.CTkFont(size=15, weight="bold")
         )
@@ -414,47 +525,47 @@ class SonnetApp(ctk.CTk):
         self.speed_menu.set("1.0x")
         self.speed_menu.pack(side="right", padx=4)
 
-        # ==========================================
+        # ------------------------------------------
         # RIGHT SIDEBAR: MAP & TARGET INSPECTOR
-        # ==========================================
-        self.right_sidebar = ctk.CTkFrame(self, width=330, corner_radius=0, fg_color="#121316")
+        # ------------------------------------------
+        self.right_sidebar = ctk.CTkFrame(self, width=340, corner_radius=0, fg_color="#121316")
         self.right_sidebar.grid(row=1, column=2, sticky="nsew", padx=1, pady=1)
         self.right_sidebar.pack_propagate(False)
 
-        # Section: Location Map
+        # Geospatial Map
         ctk.CTkLabel(
             self.right_sidebar,
             text="GEOSPATIAL SURVEY MAP",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#868e96"
-        ).pack(anchor="w", padx=14, pady=(10, 6))
+        ).pack(anchor="w", padx=14, pady=(10, 4))
 
         try:
             import tkintermapview
-            self.map_widget = tkintermapview.TkinterMapView(self.right_sidebar, width=300, height=270, corner_radius=6)
+            self.map_widget = tkintermapview.TkinterMapView(self.right_sidebar, width=310, height=250, corner_radius=6)
             self.map_widget.pack(padx=14, pady=2)
             self.map_widget.set_tile_server("https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22)
             self.map_widget.set_position(0, 0)
             self.map_widget.set_zoom(1)
 
-            self.map_overlay = ctk.CTkFrame(self.right_sidebar, width=300, height=270, fg_color="#0a1220", corner_radius=6)
+            self.map_overlay = ctk.CTkFrame(self.right_sidebar, width=310, height=250, fg_color="#0a1220", corner_radius=6)
             self.map_overlay.place(in_=self.map_widget, relx=0, rely=0, relwidth=1, relheight=1)
             ctk.CTkLabel(self.map_overlay, text="No GPS Data Loaded.\nLoad GPS to view track.", text_color="#868e96").place(relx=0.5, rely=0.5, anchor="center")
         except ImportError:
-            self.map_area = ctk.CTkFrame(self.right_sidebar, width=300, height=270, fg_color="#0a1220", corner_radius=6)
+            self.map_area = ctk.CTkFrame(self.right_sidebar, width=310, height=250, fg_color="#0a1220", corner_radius=6)
             self.map_area.pack(padx=14, pady=2)
             ctk.CTkLabel(self.map_area, text="Map widget unavailable.", text_color="#fa5252").place(relx=0.5, rely=0.5, anchor="center")
 
-        # Section: Target Inspector
+        # Target Inspector Card
         ctk.CTkLabel(
             self.right_sidebar,
-            text="TARGET INSPECTOR",
+            text="TARGET INSPECTOR & VERIFICATION",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color="#868e96"
-        ).pack(anchor="w", padx=14, pady=(14, 4))
+        ).pack(anchor="w", padx=14, pady=(12, 4))
 
-        self.inspector_card = ctk.CTkFrame(self.right_sidebar, fg_color="#18191d", corner_radius=6)
-        self.inspector_card.pack(fill="both", expand=True, padx=14, pady=4)
+        self.inspector_card = ctk.CTkScrollableFrame(self.right_sidebar, height=350, fg_color="#18191d", corner_radius=6)
+        self.inspector_card.pack(fill="both", expand=True, padx=14, pady=(2, 10))
 
         # Inspector Placeholder / Thumbnail
         self.lbl_insp_thumb = ctk.CTkLabel(
@@ -463,7 +574,7 @@ class SonnetApp(ctk.CTk):
             text_color="#495057",
             font=ctk.CTkFont(size=11)
         )
-        self.lbl_insp_thumb.pack(fill="x", padx=10, pady=(10, 4))
+        self.lbl_insp_thumb.pack(fill="x", padx=10, pady=(6, 4))
 
         self.lbl_insp_title = ctk.CTkLabel(
             self.inspector_card,
@@ -482,14 +593,41 @@ class SonnetApp(ctk.CTk):
         )
         self.lbl_insp_meta.pack(anchor="w", padx=10, pady=2)
 
+        # Verification Status Radio / Segmented Button
+        ctk.CTkLabel(self.inspector_card, text="Operator Status:", text_color="#868e96", font=ctk.CTkFont(size=10, weight="bold")).pack(anchor="w", padx=10, pady=(6, 2))
+        self.seg_verify = ctk.CTkSegmentedButton(
+            self.inspector_card,
+            values=["❓ Pending", "✅ Confirmed", "❌ False Alarm"],
+            command=self.on_verification_changed,
+            selected_color="#1c7ed6"
+        )
+        self.seg_verify.set("❓ Pending")
+        self.seg_verify.pack(fill="x", padx=10, pady=2)
+
+        # Operator Notes
+        ctk.CTkLabel(self.inspector_card, text="Operator Notes:", text_color="#868e96", font=ctk.CTkFont(size=10, weight="bold")).pack(anchor="w", padx=10, pady=(6, 2))
+        self.entry_notes = ctk.CTkEntry(self.inspector_card, placeholder_text="Type observations here...")
+        self.entry_notes.pack(fill="x", padx=10, pady=2)
+
+        self.btn_save_note = ctk.CTkButton(
+            self.inspector_card,
+            text="💾 Save Notes & Status",
+            height=26,
+            command=self.save_operator_notes,
+            fg_color="#343a40",
+            hover_color="#495057",
+            font=ctk.CTkFont(size=11)
+        )
+        self.btn_save_note.pack(fill="x", padx=10, pady=(2, 6))
+
         # Inspector Action Buttons
         self.insp_actions_frame = ctk.CTkFrame(self.inspector_card, fg_color="transparent")
-        self.insp_actions_frame.pack(fill="x", padx=10, pady=(8, 10))
+        self.insp_actions_frame.pack(fill="x", padx=10, pady=(4, 6))
 
         self.btn_insp_open = ctk.CTkButton(
             self.insp_actions_frame,
             text="🔍 Open Snapshot",
-            width=130,
+            width=135,
             height=28,
             command=self.open_selected_snapshot,
             fg_color="#343a40",
@@ -501,7 +639,7 @@ class SonnetApp(ctk.CTk):
         self.btn_insp_map = ctk.CTkButton(
             self.insp_actions_frame,
             text="📍 Center Map",
-            width=110,
+            width=115,
             height=28,
             command=self.center_map_on_selected,
             fg_color="#343a40",
@@ -510,24 +648,37 @@ class SonnetApp(ctk.CTk):
         )
         self.btn_insp_map.pack(side="right", padx=2)
 
-        self.selected_target_id = None
-
-        # ==========================================
+        # ------------------------------------------
         # BOTTOM: LOG & ANALYTICS
-        # ==========================================
+        # ------------------------------------------
         self.bottom_frame = ctk.CTkFrame(self, height=240, corner_radius=0, fg_color="#121316")
         self.bottom_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=1, pady=1)
         self.bottom_frame.grid_columnconfigure(0, weight=6)
         self.bottom_frame.grid_columnconfigure(1, weight=4)
         self.bottom_frame.grid_rowconfigure(0, weight=1)
 
-        # Target Log
+        # Target Log Frame
         self.log_frame = ctk.CTkFrame(self.bottom_frame, fg_color="transparent")
         self.log_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=6)
 
         self.log_header_frame = ctk.CTkFrame(self.log_frame, fg_color="transparent")
         self.log_header_frame.pack(fill="x")
-        ctk.CTkLabel(self.log_header_frame, text="● Detected Anomaly Log (Click row to inspect)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#4dabf7").pack(side="left")
+
+        ctk.CTkLabel(self.log_header_frame, text="● Detected Anomaly Log", font=ctk.CTkFont(size=12, weight="bold"), text_color="#4dabf7").pack(side="left")
+
+        # Category Filter Dropdown
+        self.filter_menu = ctk.CTkOptionMenu(
+            self.log_header_frame,
+            values=["All Targets", "Confirmed Only", "Mines Only", "Shipwrecks Only"],
+            width=130,
+            height=24,
+            command=self.on_filter_changed,
+            fg_color="#212529",
+            button_color="#343a40"
+        )
+        self.filter_menu.set("All Targets")
+        self.filter_menu.pack(side="left", padx=12)
+
         self.lbl_fps = ctk.CTkLabel(self.log_header_frame, text="FPS: 0.0", font=ctk.CTkFont(size=11), text_color="#868e96")
         self.lbl_fps.pack(side="right", padx=10)
         self.lbl_total_dets = ctk.CTkLabel(self.log_header_frame, text="Total Anomalies: 0", font=ctk.CTkFont(size=11), text_color="#868e96")
@@ -540,20 +691,22 @@ class SonnetApp(ctk.CTk):
         style.configure("Treeview.Heading", background="#18191d", foreground="#adb5bd", borderwidth=0, font=("Segoe UI", 9, "bold"))
         style.map("Treeview", background=[("selected", "#1c7ed6")])
 
-        cols = ("TRACK ID", "CLASS", "CONFIDENCE", "TIME/FRAME", "LATITUDE", "LONGITUDE")
+        cols = ("TRACK ID", "CLASS", "CONFIDENCE", "STATUS", "TIME/FRAME", "LATITUDE", "LONGITUDE")
         self.tree = ttk.Treeview(self.log_frame, columns=cols, show="headings", height=6)
         self.tree.heading("TRACK ID", text="TRACK ID")
-        self.tree.column("TRACK ID", width=95, anchor="w")
+        self.tree.column("TRACK ID", width=85, anchor="w")
         self.tree.heading("CLASS", text="CLASS")
-        self.tree.column("CLASS", width=120, anchor="w")
+        self.tree.column("CLASS", width=110, anchor="w")
         self.tree.heading("CONFIDENCE", text="CONFIDENCE")
-        self.tree.column("CONFIDENCE", width=95, anchor="w")
+        self.tree.column("CONFIDENCE", width=90, anchor="w")
+        self.tree.heading("STATUS", text="STATUS")
+        self.tree.column("STATUS", width=105, anchor="w")
         self.tree.heading("TIME/FRAME", text="TIME/FRAME")
-        self.tree.column("TIME/FRAME", width=110, anchor="w")
+        self.tree.column("TIME/FRAME", width=100, anchor="w")
         self.tree.heading("LATITUDE", text="LATITUDE")
-        self.tree.column("LATITUDE", width=110, anchor="w")
+        self.tree.column("LATITUDE", width=100, anchor="w")
         self.tree.heading("LONGITUDE", text="LONGITUDE")
-        self.tree.column("LONGITUDE", width=110, anchor="w")
+        self.tree.column("LONGITUDE", width=100, anchor="w")
 
         self.tree.pack(fill="both", expand=True, pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
@@ -573,25 +726,63 @@ class SonnetApp(ctk.CTk):
         self.update_graph()
 
     # ==========================================
-    # COLORMAPS & DISPLAY ENHANCEMENTS
+    # MODEL MANAGEMENT & HOT-SWAPPING
+    # ==========================================
+    def on_model_selected(self, model_name):
+        model_path = self.available_models.get(model_name)
+        if model_path:
+            self.load_active_model(model_path)
+            self.set_status(f"🟢 LOADED: {model_name}", "#51cf66", "#1a2e22")
+
+    # ==========================================
+    # DSP & ACOUSTIC IMAGE PROCESSING
     # ==========================================
     def on_colormap_changed(self, choice):
         self.active_colormap = choice
 
-    def apply_colormap(self, bgr_frame):
+    def on_clahe_toggle(self):
+        self.clahe_enabled = bool(self.switch_clahe.get())
+
+    def on_clahe_clip_slide(self, val):
+        self.clahe_clip = float(val)
+
+    def on_contrast_slide(self, val):
+        self.contrast_factor = float(val)
+
+    def toggle_audio_alerts(self):
+        self.audio_alerts_enabled = bool(self.switch_audio.get())
+
+    def apply_dsp_filters(self, bgr_frame):
+        processed = bgr_frame
+
+        # 1. Gain & Contrast Adjustments
+        if self.contrast_factor != 1.0:
+            processed = cv2.convertScaleAbs(processed, alpha=self.contrast_factor, beta=self.brightness_offset)
+
+        # 2. CLAHE Adaptive Equalization
+        if self.clahe_enabled:
+            lab = cv2.cvtColor(processed, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=self.clahe_clip, tileGridSize=(8, 8))
+            cl = clahe.apply(l)
+            limg = cv2.merge((cl, a, b))
+            processed = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+
+        # 3. Sonar Palettes / Colormaps
         if self.active_colormap == "Thermal (Inferno)":
-            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-            return cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            processed = cv2.applyColorMap(gray, cv2.COLORMAP_INFERNO)
         elif self.active_colormap == "Ironbow (Jet)":
-            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-            return cv2.applyColorMap(gray, cv2.COLORMAP_JET)
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            processed = cv2.applyColorMap(gray, cv2.COLORMAP_JET)
         elif self.active_colormap == "Ocean Blue":
-            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-            return cv2.applyColorMap(gray, cv2.COLORMAP_OCEAN)
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            processed = cv2.applyColorMap(gray, cv2.COLORMAP_OCEAN)
         elif self.active_colormap == "Amber (Sepia)":
-            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-            return cv2.applyColorMap(gray, cv2.COLORMAP_AUTUMN)
-        return bgr_frame
+            gray = cv2.cvtColor(processed, cv2.COLOR_BGR2GRAY)
+            processed = cv2.applyColorMap(gray, cv2.COLORMAP_AUTUMN)
+
+        return processed
 
     # ==========================================
     # MEDIA LOADING & VIDEO CONTROLS
@@ -617,12 +808,11 @@ class SonnetApp(ctk.CTk):
             self.scrub_slider.configure(to=1)
             self.scrub_slider.set(0)
             self.lbl_time_status.configure(text="Single Still Frame")
-            # Load and display initial frame
             img = cv2.imread(self.media_path)
             if img is not None:
                 h, w = img.shape[:2]
                 self.lbl_resolution.configure(text=f"{w}x{h}")
-                self.display_frame(self.apply_colormap(img))
+                self.display_frame(self.apply_dsp_filters(img))
         elif ext == '.xtf':
             self.is_image = False
             self.is_xtf = True
@@ -633,7 +823,6 @@ class SonnetApp(ctk.CTk):
             self.is_xtf = False
             self.btn_play.configure(text="▶ PLAY VIDEO")
 
-            # Initialize capture to extract metadata
             self.cap = cv2.VideoCapture(self.media_path)
             if self.cap.isOpened():
                 self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -647,10 +836,9 @@ class SonnetApp(ctk.CTk):
                 self.scrub_slider.set(0)
                 self.update_time_label(0)
 
-                # Read first frame
                 ret, frame = self.cap.read()
                 if ret:
-                    self.display_frame(self.apply_colormap(frame))
+                    self.display_frame(self.apply_dsp_filters(frame))
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         self.set_status("🟢 MEDIA LOADED", "#51cf66", "#1a2e22")
@@ -700,7 +888,7 @@ class SonnetApp(ctk.CTk):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ret, frame = self.cap.read()
             if ret:
-                self.display_frame(self.apply_colormap(frame))
+                self.display_frame(self.apply_dsp_filters(frame))
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
         self.scrub_slider.set(0)
@@ -715,9 +903,8 @@ class SonnetApp(ctk.CTk):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
         ret, frame = self.cap.read()
         if ret:
-            # Sync telemetry if available
             self.sync_telemetry_for_frame(target_frame)
-            processed = self.apply_colormap(frame)
+            processed = self.apply_dsp_filters(frame)
             self.display_frame(processed)
             self.update_time_label(target_frame)
 
@@ -755,7 +942,7 @@ class SonnetApp(ctk.CTk):
         self.status_pill.configure(text=text, text_color=fg_color, fg_color=bg_color)
 
     # ==========================================
-    # PLAYBACK LOOPS & INFERENCE
+    # PLAYBACK LOOPS & DETECTION
     # ==========================================
     def process_image(self):
         frame = cv2.imread(self.media_path)
@@ -764,16 +951,15 @@ class SonnetApp(ctk.CTk):
 
         conf = self.conf_slider.get()
         iou = self.iou_slider.get()
-        max_det = int(self.max_det_slider.get())
 
-        if model is not None:
-            results = model(frame, conf=conf, iou=iou, max_det=max_det, verbose=False)
+        if self.model is not None:
+            results = self.model(frame, conf=conf, iou=iou, verbose=False)
             res_frame = results[0].plot()
             self.process_detections(results[0], "Still Image", res_frame, is_video=False)
         else:
             res_frame = frame
 
-        colored = self.apply_colormap(res_frame)
+        colored = self.apply_dsp_filters(res_frame)
         self.display_frame(colored)
 
     def play_loop(self):
@@ -789,39 +975,31 @@ class SonnetApp(ctk.CTk):
             self.frames_processed += 1
             conf = self.conf_slider.get()
             iou = self.iou_slider.get()
-            max_det = int(self.max_det_slider.get())
 
-            # Real FPS Calculation
             elapsed = time.time() - self.start_time
             if elapsed > 0:
                 fps = self.frames_processed / elapsed
                 self.after(0, lambda f=fps: self.lbl_fps.configure(text=f"FPS: {f:.1f}"))
 
-            # Telemetry sync
             self.sync_telemetry_for_frame(self.current_frame_idx)
 
-            # YOLO inference with ByteTrack
-            if model is not None:
-                results = model.track(frame, conf=conf, iou=iou, max_det=max_det, persist=True, tracker="bytetrack.yaml", verbose=False)
+            if self.model is not None:
+                results = self.model.track(frame, conf=conf, iou=iou, persist=True, tracker="bytetrack.yaml", verbose=False)
                 res_frame = results[0].plot(conf=False)
                 self.process_detections(results[0], f"F-{self.current_frame_idx}", res_frame, is_video=True)
             else:
                 res_frame = frame
 
-            # Apply Sonar Palette & Display
-            final_frame = self.apply_colormap(res_frame)
+            final_frame = self.apply_dsp_filters(res_frame)
             self.display_frame(final_frame)
 
-            # Update timeline slider
             cur_idx = self.current_frame_idx
             self.after(0, lambda idx=cur_idx: self.scrub_slider.set(idx))
             self.after(0, lambda idx=cur_idx: self.update_time_label(idx))
 
-            # Regulate playback speed
             delay = (1.0 / self.video_fps) / max(0.25, self.playback_speed)
             time.sleep(max(0.005, delay))
 
-        # Reached end or paused
         if self.current_frame_idx >= self.total_frames - 1:
             self.is_playing = False
             self.after(0, lambda: self.btn_play.configure(text="▶ PLAY", fg_color="#2b8a3e"))
@@ -869,21 +1047,20 @@ class SonnetApp(ctk.CTk):
                 self.frames_processed += 1
                 conf = self.conf_slider.get()
                 iou = self.iou_slider.get()
-                max_det = int(self.max_det_slider.get())
 
                 elapsed = time.time() - self.start_time
                 if elapsed > 0:
                     fps = self.frames_processed / elapsed
                     self.after(0, lambda f=fps: self.lbl_fps.configure(text=f"FPS: {f:.1f}"))
 
-                if model is not None:
-                    results = model.track(bgr_frame, conf=conf, iou=iou, max_det=max_det, persist=True, tracker="bytetrack.yaml", verbose=False)
+                if self.model is not None:
+                    results = self.model.track(bgr_frame, conf=conf, iou=iou, persist=True, tracker="bytetrack.yaml", verbose=False)
                     res_frame = results[0].plot(conf=False)
                     self.process_detections(results[0], f"XTF-{i // frame_size}", res_frame, is_video=True)
                 else:
                     res_frame = bgr_frame
 
-                final_frame = self.apply_colormap(res_frame)
+                final_frame = self.apply_dsp_filters(res_frame)
                 self.display_frame(final_frame)
                 time.sleep(0.1 / max(0.25, self.playback_speed))
 
@@ -954,7 +1131,6 @@ class SonnetApp(ctk.CTk):
                 self.target_counter += 1
                 display_id = f"TRK-{assigned_id:03d}" if assigned_id else f"TRK-{self.target_counter:03d}"
 
-                # Snapshot cropping
                 snap_path = ""
                 try:
                     x1, y1, x2, y2 = map(int, coords)
@@ -972,7 +1148,6 @@ class SonnetApp(ctk.CTk):
                 except Exception as e:
                     print("Snapshot crop error:", e)
 
-                # Store target record
                 cur_lat = self.current_lat
                 cur_lon = self.current_lon
                 cur_depth = self.current_depth
@@ -981,6 +1156,8 @@ class SonnetApp(ctk.CTk):
                     "id": display_id,
                     "class": cls_name,
                     "conf": conf_val,
+                    "status": "❓ Pending",
+                    "notes": "",
                     "time_frame": time_frame,
                     "snapshot": snap_path,
                     "lat": cur_lat,
@@ -990,11 +1167,10 @@ class SonnetApp(ctk.CTk):
                 }
                 self.target_records[display_id] = record
 
-                # Add to treeview
-                tree_val = (display_id, cls_name.replace("_", " ").title(), f"{conf_val * 100:.1f}%", time_frame, cur_lat, cur_lon)
-                self.after(0, lambda v=tree_val: self.tree.insert("", 0, values=v))
+                # Insert into log table if matches filter
+                self.insert_tree_row(record)
 
-                # Drop marker on map if valid coordinates exist
+                # Geotag on map
                 if hasattr(self, 'map_widget') and cur_lat != "--" and cur_lon != "--":
                     try:
                         l_f = float(cur_lat)
@@ -1004,25 +1180,79 @@ class SonnetApp(ctk.CTk):
                     except ValueError:
                         pass
 
-                # Update stats
                 if cls_name in self.stats:
                     self.stats[cls_name] += 1
                     updated_stats = True
 
-                # Alert in status pill
-                self.after(0, lambda name=cls_name: self.set_status(f"🚨 DETECTED: {name.upper()}", "#ff6b6b", "#3b1818"))
+                # Threat Audio-Visual Alert
+                self.trigger_threat_alert(cls_name)
 
         self.after(0, self.prune_tree)
         if updated_stats:
             self.after(0, self.update_graph)
 
+    def trigger_threat_alert(self, cls_name):
+        # Visual alert
+        self.after(0, lambda name=cls_name: self.set_status(f"🚨 DETECTED: {name.upper()}", "#ff6b6b", "#3b1818"))
+
+        # Audio alert for high-risk targets
+        now = time.time()
+        if self.audio_alerts_enabled and (now - self.last_alert_time > 1.5):
+            self.last_alert_time = now
+            if cls_name in ["mine_cylinder", "shipwreck"]:
+                threading.Thread(target=lambda: winsound.Beep(980, 160), daemon=True).start()
+
+    def insert_tree_row(self, record):
+        if self.matches_filter(record):
+            tree_val = (
+                record["id"],
+                record["class"].replace("_", " ").title(),
+                f"{record['conf'] * 100:.1f}%",
+                record["status"],
+                record["time_frame"],
+                record["lat"],
+                record["lon"]
+            )
+            self.after(0, lambda v=tree_val: self.tree.insert("", 0, values=v))
+
+    def matches_filter(self, record):
+        if self.log_filter == "All Targets":
+            return True
+        elif self.log_filter == "Confirmed Only":
+            return record.get("status") == "✅ Confirmed"
+        elif self.log_filter == "Mines Only":
+            return record.get("class") == "mine_cylinder"
+        elif self.log_filter == "Shipwrecks Only":
+            return record.get("class") == "shipwreck"
+        return True
+
+    def on_filter_changed(self, choice):
+        self.log_filter = choice
+        self.repopulate_tree()
+
+    def repopulate_tree(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for record in self.target_records.values():
+            if self.matches_filter(record):
+                tree_val = (
+                    record["id"],
+                    record["class"].replace("_", " ").title(),
+                    f"{record['conf'] * 100:.1f}%",
+                    record["status"],
+                    record["time_frame"],
+                    record["lat"],
+                    record["lon"]
+                )
+                self.tree.insert("", 0, values=tree_val)
+
     def prune_tree(self):
         items = self.tree.get_children()
-        if len(items) > 100:
+        if len(items) > 120:
             self.tree.delete(items[-1])
 
     # ==========================================
-    # TARGET INSPECTION INTERACTION
+    # TARGET INSPECTION & OPERATOR WORKFLOW
     # ==========================================
     def on_tree_select(self, event):
         selected = self.tree.selection()
@@ -1037,7 +1267,7 @@ class SonnetApp(ctk.CTk):
         if not record:
             return
 
-        # Update Inspector UI
+        # Update title & metadata
         self.lbl_insp_title.configure(text=f"{record['id']} • {record['class'].replace('_', ' ').upper()}")
         meta_str = (
             f"Confidence:  {record['conf'] * 100:.1f}%\n"
@@ -1047,6 +1277,11 @@ class SonnetApp(ctk.CTk):
             f"Logged At:   {record['timestamp']}"
         )
         self.lbl_insp_meta.configure(text=meta_str)
+
+        # Set verification status & notes
+        self.seg_verify.set(record.get("status", "❓ Pending"))
+        self.entry_notes.delete(0, 'end')
+        self.entry_notes.insert(0, record.get("notes", ""))
 
         # Show thumbnail
         snap_path = record.get("snapshot")
@@ -1061,6 +1296,25 @@ class SonnetApp(ctk.CTk):
                 self.lbl_insp_thumb.configure(image=None, text="[Image Load Error]")
         else:
             self.lbl_insp_thumb.configure(image=None, text="[No Snapshot Available]")
+
+    def on_verification_changed(self, choice):
+        if not self.selected_target_id:
+            return
+        record = self.target_records.get(self.selected_target_id)
+        if record:
+            record["status"] = choice
+            self.repopulate_tree()
+
+    def save_operator_notes(self):
+        if not self.selected_target_id:
+            return
+        record = self.target_records.get(self.selected_target_id)
+        if record:
+            record["notes"] = self.entry_notes.get()
+            record["status"] = self.seg_verify.get()
+            self.repopulate_tree()
+            self.btn_save_note.configure(text="✅ Notes Saved!", fg_color="#2b8a3e")
+            self.after(2000, lambda: self.btn_save_note.configure(text="💾 Save Notes & Status", fg_color="#343a40"))
 
     def open_selected_snapshot(self):
         if not self.selected_target_id:
@@ -1097,7 +1351,7 @@ class SonnetApp(ctk.CTk):
                 for row in reader:
                     self.gps_data.append(row)
 
-            self.lbl_gps_status.configure(text=f"GPS: {len(self.gps_data)} Coordinates Loaded", text_color="#51cf66")
+            self.lbl_gps_status.configure(text=f"GPS: {len(self.gps_data)} Points Loaded", text_color="#51cf66")
 
             if hasattr(self, 'map_overlay'):
                 self.map_overlay.destroy()
@@ -1143,7 +1397,6 @@ class SonnetApp(ctk.CTk):
                 l_f = float(lat)
                 lo_f = float(lon)
                 self.map_widget.set_position(l_f, lo_f)
-                # Keep active ROV position marker
                 if not hasattr(self, 'rov_marker') or self.rov_marker is None:
                     self.rov_marker = self.map_widget.set_marker(l_f, lo_f, text="ROV")
                 else:
@@ -1201,7 +1454,7 @@ class SonnetApp(ctk.CTk):
 
             c = canvas.Canvas(filename, pagesize=letter)
             c.setFont("Helvetica-Bold", 16)
-            c.drawString(50, 750, "SONNET: Mission Debrief & Acoustic Anomaly Report")
+            c.drawString(50, 750, "SONNET: Mission Debrief & Acoustic Intelligence Report")
 
             c.setFont("Helvetica", 10)
             c.drawString(50, 730, f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1222,7 +1475,7 @@ class SonnetApp(ctk.CTk):
 
             y -= 20
             c.setFont("Helvetica-Bold", 12)
-            c.drawString(50, y, "Recent Targets Visual Log:")
+            c.drawString(50, y, "Verified Target Visual Log:")
             y -= 20
 
             records = list(self.target_records.values())
@@ -1232,9 +1485,10 @@ class SonnetApp(ctk.CTk):
                     y = 750
 
                 c.setFont("Helvetica-Bold", 10)
-                c.drawString(50, y, f"Target: {rec['id']} - {rec['class'].title()} (Conf: {rec['conf'] * 100:.1f}%)")
+                c.drawString(50, y, f"Target: {rec['id']} - {rec['class'].title()} [{rec.get('status', 'Pending')}] (Conf: {rec['conf'] * 100:.1f}%)")
                 c.setFont("Helvetica", 9)
-                c.drawString(50, y - 12, f"Coords: {rec['lat']}, {rec['lon']} | Depth: {rec['depth']}m | Frame: {rec['time_frame']}")
+                note_text = f" | Notes: {rec['notes']}" if rec.get('notes') else ""
+                c.drawString(50, y - 12, f"Coords: {rec['lat']}, {rec['lon']} | Depth: {rec['depth']}m{note_text}")
 
                 snap_path = rec.get("snapshot")
                 if snap_path and os.path.exists(snap_path):
@@ -1246,7 +1500,7 @@ class SonnetApp(ctk.CTk):
 
             c.save()
             self.btn_report.configure(text="✅ PDF SAVED", fg_color="#2b8a3e")
-            self.after(3000, lambda: self.btn_report.configure(text="📄 EXPORT PDF", fg_color="#1c7ed6"))
+            self.after(3000, lambda: self.btn_report.configure(text="📄 PDF", fg_color="#1c7ed6"))
             os.startfile(os.path.abspath(filename))
         except Exception as e:
             messagebox.showerror("Export Error", f"Failed to generate PDF: {e}")
@@ -1262,9 +1516,9 @@ class SonnetApp(ctk.CTk):
         try:
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
-                writer.writerow(["Track ID", "Class", "Confidence", "Time/Frame", "Latitude", "Longitude", "Depth (m)", "Logged Time", "Snapshot File"])
+                writer.writerow(["Track ID", "Class", "Confidence", "Status", "Notes", "Time/Frame", "Latitude", "Longitude", "Depth (m)", "Logged Time", "Snapshot File"])
                 for r in self.target_records.values():
-                    writer.writerow([r['id'], r['class'], f"{r['conf']:.4f}", r['time_frame'], r['lat'], r['lon'], r['depth'], r['timestamp'], r['snapshot']])
+                    writer.writerow([r['id'], r['class'], f"{r['conf']:.4f}", r.get('status', ''), r.get('notes', ''), r['time_frame'], r['lat'], r['lon'], r['depth'], r['timestamp'], r['snapshot']])
 
             self.btn_export_csv.configure(text="✅ CSV SAVED", fg_color="#2b8a3e")
             self.after(3000, lambda: self.btn_export_csv.configure(text="📊 CSV", fg_color="#343a40"))
@@ -1296,6 +1550,8 @@ class SonnetApp(ctk.CTk):
                         "id": r['id'],
                         "class": r['class'],
                         "confidence": r['conf'],
+                        "status": r.get('status', ''),
+                        "notes": r.get('notes', ''),
                         "frame": r['time_frame'],
                         "depth": r['depth'],
                         "timestamp": r['timestamp'],
