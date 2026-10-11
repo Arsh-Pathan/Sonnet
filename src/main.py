@@ -557,16 +557,57 @@ class SonnetApp(ctk.CTk):
             self.map_area.pack(padx=14, pady=2)
             ctk.CTkLabel(self.map_area, text="Map widget unavailable.", text_color="#fa5252").place(relx=0.5, rely=0.5, anchor="center")
 
-        # Target Inspector Card
-        ctk.CTkLabel(
-            self.right_sidebar,
-            text="TARGET INSPECTOR & VERIFICATION",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#868e96"
-        ).pack(anchor="w", padx=14, pady=(12, 4))
+        # ------------------------------------------
+        # LOWER RIGHT PANEL: LIVE ACOUSTIC A-SCAN & TARGET INSPECTOR
+        # ------------------------------------------
+        self.right_view_header = ctk.CTkFrame(self.right_sidebar, fg_color="transparent")
+        self.right_view_header.pack(fill="x", padx=14, pady=(10, 4))
 
+        self.seg_right_view = ctk.CTkSegmentedButton(
+            self.right_view_header,
+            values=["📡 Live Acoustic A-Scan", "🎯 Target Inspector"],
+            command=self.on_right_view_changed,
+            selected_color="#1c7ed6",
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.seg_right_view.pack(fill="x")
+
+        # Container 1: Live Acoustic A-Scan (Oscilloscope View matching screenshot)
+        self.ascan_container = ctk.CTkFrame(self.right_sidebar, fg_color="#18191d", corner_radius=6)
+
+        self.lbl_ascan_title = ctk.CTkLabel(
+            self.ascan_container,
+            text="LIVE ACOUSTIC A-SCAN (PING PROFILE)",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#e9ecef"
+        )
+        self.lbl_ascan_title.pack(anchor="w", padx=12, pady=(8, 2))
+
+        # Canvas for oscilloscope trace
+        self.canvas_ascan = tk.Canvas(
+            self.ascan_container,
+            bg="#08090a",
+            highlightthickness=1,
+            highlightbackground="#2b2d35"
+        )
+        self.canvas_ascan.pack(fill="both", expand=True, padx=10, pady=(2, 6))
+        self.canvas_ascan.bind("<Configure>", lambda e: self.draw_idle_ascan())
+
+        # Telemetry footer bar
+        self.ascan_telemetry_frame = ctk.CTkFrame(self.ascan_container, fg_color="#121316", corner_radius=4)
+        self.ascan_telemetry_frame.pack(fill="x", padx=10, pady=(0, 8))
+
+        self.lbl_ascan_metrics = ctk.CTkLabel(
+            self.ascan_telemetry_frame,
+            text="Nadir: Center | Towfish Ping: Active",
+            font=ctk.CTkFont(size=10, family="Consolas"),
+            text_color="#868e96"
+        )
+        self.lbl_ascan_metrics.pack(padx=6, pady=3)
+
+        # Container 2: Target Inspector Card
         self.inspector_card = ctk.CTkScrollableFrame(self.right_sidebar, height=350, fg_color="#18191d", corner_radius=6)
-        self.inspector_card.pack(fill="both", expand=True, padx=14, pady=(2, 10))
 
         # Inspector Placeholder / Thumbnail
         self.lbl_insp_thumb = ctk.CTkLabel(
@@ -649,6 +690,10 @@ class SonnetApp(ctk.CTk):
         )
         self.btn_insp_map.pack(side="right", padx=2)
 
+        # Default lower right view is Live Acoustic A-Scan (filling inspection position)
+        self.seg_right_view.set("📡 Live Acoustic A-Scan")
+        self.ascan_container.pack(fill="both", expand=True, padx=14, pady=(2, 10))
+
         # ------------------------------------------
         # BOTTOM: LOG & ANALYTICS
         # ------------------------------------------
@@ -712,83 +757,37 @@ class SonnetApp(ctk.CTk):
         self.tree.pack(fill="both", expand=True, pady=4)
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
 
-        # Dual-Mode Analysis & Oscilloscope Frame
+        # Analytics Graph
         self.graph_frame = ctk.CTkFrame(self.bottom_frame, fg_color="transparent")
         self.graph_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=6)
-        self.graph_frame.grid_rowconfigure(1, weight=1)
-        self.graph_frame.grid_columnconfigure(0, weight=1)
 
-        # Header Switcher
-        self.analysis_header = ctk.CTkFrame(self.graph_frame, fg_color="transparent")
-        self.analysis_header.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-
-        self.seg_analysis_mode = ctk.CTkSegmentedButton(
-            self.analysis_header,
-            values=["📡 Live Acoustic A-Scan", "📊 Anomaly Distribution"],
-            command=self.on_analysis_mode_changed,
-            selected_color="#1c7ed6"
-        )
-        self.seg_analysis_mode.set("📡 Live Acoustic A-Scan")
-        self.seg_analysis_mode.pack(side="left")
-
-        # Container 1: Live Acoustic A-Scan (Oscilloscope View matching screenshot)
-        self.ascan_container = ctk.CTkFrame(self.graph_frame, fg_color="#18191d", corner_radius=6)
-        self.ascan_container.grid(row=1, column=0, sticky="nsew")
-        self.ascan_container.grid_rowconfigure(1, weight=1)
-        self.ascan_container.grid_columnconfigure(0, weight=1)
-
-        self.lbl_ascan_title = ctk.CTkLabel(
-            self.ascan_container,
-            text="LIVE ACOUSTIC A-SCAN (PING PROFILE)",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#e9ecef"
-        )
-        self.lbl_ascan_title.grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
-
-        # Canvas for oscilloscope trace
-        self.canvas_ascan = tk.Canvas(
-            self.ascan_container,
-            bg="#0b0c0e",
-            highlightthickness=1,
-            highlightbackground="#2b2d35"
-        )
-        self.canvas_ascan.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 8))
-        self.canvas_ascan.bind("<Configure>", lambda e: self.draw_idle_ascan())
-
-        # Container 2: Anomaly Distribution Bar Chart
-        self.dist_container = ctk.CTkFrame(self.graph_frame, fg_color="#18191d", corner_radius=6)
-        self.dist_container.grid_rowconfigure(1, weight=1)
-        self.dist_container.grid_columnconfigure(0, weight=1)
-
-        self.lbl_dist_title = ctk.CTkLabel(
-            self.dist_container,
+        ctk.CTkLabel(
+            self.graph_frame,
             text="📊 Anomaly Distribution",
-            font=ctk.CTkFont(size=11, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#4dabf7"
-        )
-        self.lbl_dist_title.grid(row=0, column=0, sticky="w", padx=12, pady=(6, 2))
+        ).pack(anchor="w", pady=(0, 2))
 
         plt.style.use('dark_background')
-        self.fig, self.ax = plt.subplots(figsize=(4, 2.0), dpi=80)
-        self.fig.patch.set_facecolor('#18191d')
-        self.ax.set_facecolor('#18191d')
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.dist_container)
-        self.canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
+        self.fig, self.ax = plt.subplots(figsize=(4, 2.3), dpi=80)
+        self.fig.patch.set_facecolor('#121316')
+        self.ax.set_facecolor('#121316')
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.update_graph()
         self.after(200, self.draw_idle_ascan)
 
     # ==========================================
     # ACOUSTIC A-SCAN (PING PROFILE) DISPLAY
     # ==========================================
-    def on_analysis_mode_changed(self, choice):
+    def on_right_view_changed(self, choice):
         if choice == "📡 Live Acoustic A-Scan":
-            self.dist_container.grid_forget()
-            self.ascan_container.grid(row=1, column=0, sticky="nsew")
+            self.inspector_card.pack_forget()
+            self.ascan_container.pack(fill="both", expand=True, padx=14, pady=(2, 10))
             self.draw_idle_ascan()
         else:
-            self.ascan_container.grid_forget()
-            self.dist_container.grid(row=1, column=0, sticky="nsew")
-            self.update_graph()
+            self.ascan_container.pack_forget()
+            self.inspector_card.pack(fill="both", expand=True, padx=14, pady=(2, 10))
 
     def update_ascan(self, profile):
         if profile is None or len(profile) == 0:
@@ -840,6 +839,13 @@ class SonnetApp(ctk.CTk):
         # Range text labels exactly matching user screenshot
         self.canvas_ascan.create_text(pad_x + 38, h - pad_y - 4, text="Port Range", fill="#868e96", font=("Segoe UI", 9))
         self.canvas_ascan.create_text(pad_x + plot_w - 38, h - pad_y - 4, text="Stbd Range", fill="#868e96", font=("Segoe UI", 9))
+
+        # Update telemetry metrics footer if available
+        if hasattr(self, 'lbl_ascan_metrics') and self.lbl_ascan_metrics.winfo_exists():
+            peak_db = 20 * np.log10(max(1e-3, p_max)) if p_max > 0 else 0.0
+            self.lbl_ascan_metrics.configure(
+                text=f"Samples: {len(profile)} | Peak: {p_max:.1f} ({peak_db:.1f} dB)"
+            )
 
     def draw_idle_ascan(self):
         if not hasattr(self, 'current_ping_profile') or self.current_ping_profile is None:
@@ -948,8 +954,9 @@ class SonnetApp(ctk.CTk):
             self.is_xtf = True
             self.btn_play.configure(text="▶ PLAY XTF")
             self.lbl_time_status.configure(text="XTF Waterfall Stream")
-            self.seg_analysis_mode.set("📡 Live Acoustic A-Scan")
-            self.on_analysis_mode_changed("📡 Live Acoustic A-Scan")
+            if hasattr(self, 'seg_right_view'):
+                self.seg_right_view.set("📡 Live Acoustic A-Scan")
+                self.on_right_view_changed("📡 Live Acoustic A-Scan")
             try:
                 (fh, p) = pyxtf.xtf_read(self.media_path)
                 packets = p[pyxtf.XTFHeaderType.sonar]
@@ -1427,6 +1434,11 @@ class SonnetApp(ctk.CTk):
         item = self.tree.item(selected[0])
         display_id = item['values'][0]
         self.selected_target_id = display_id
+
+        # Auto-switch right panel to Target Inspector if currently on A-Scan
+        if hasattr(self, 'seg_right_view') and self.seg_right_view.get() != "🎯 Target Inspector":
+            self.seg_right_view.set("🎯 Target Inspector")
+            self.on_right_view_changed("🎯 Target Inspector")
 
         record = self.target_records.get(display_id)
         if not record:
