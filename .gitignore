@@ -48,5 +48,6 @@ __results___files/
 marine_sonar_yolo11s_artifacts.zip
 *.jpg
 *.png
+!assets/*.png
 *.mp4
 *.avi

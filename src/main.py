@@ -32,7 +32,11 @@ class SonnetApp(ctk.CTk):
         self.is_fullscreen = False
 
         try:
-            self.iconbitmap("assets/icon.ico")
+            if os.path.exists("assets/icon.ico"):
+                self.iconbitmap("assets/icon.ico")
+            elif os.path.exists("assets/logo.png"):
+                icon_img = tk.PhotoImage(file="assets/logo.png")
+                self.iconphoto(True, icon_img)
         except Exception:
             pass
 
@@ -1780,7 +1784,11 @@ class SonnetApp(ctk.CTk):
         snap_win.title("Snapshot Gallery")
         snap_win.geometry("740x520")
         try:
-            snap_win.iconbitmap("assets/icon.ico")
+            if os.path.exists("assets/icon.ico"):
+                snap_win.iconbitmap("assets/icon.ico")
+            elif os.path.exists("assets/logo.png"):
+                icon_img = tk.PhotoImage(file="assets/logo.png")
+                snap_win.iconphoto(True, icon_img)
         except Exception:
             pass
 
