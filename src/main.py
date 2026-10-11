@@ -8,13 +8,15 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
 import time
+import pyxtf
+import numpy as np
 
 # Initialize customtkinter settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
 
 # Load YOLO model
-model_path = "sonar_yolo11s_balanced_v1_best.pt"
+model_path = "models/sonar_yolo11s_balanced_v1_best.pt"
 try:
     model = YOLO(model_path)
 except Exception as e:
@@ -28,7 +30,7 @@ class SonnetApp(ctk.CTk):
         self.title("SONNET - Sonar Target Detection")
         self.geometry("1280x800")
         try:
-            self.iconbitmap("icon.ico")
+            self.iconbitmap("assets/icon.ico")
         except:
             pass
         
@@ -57,11 +59,23 @@ class SonnetApp(ctk.CTk):
         self.topbar = ctk.CTkFrame(self, height=50, corner_radius=0, fg_color="#18191d")
         self.topbar.grid(row=0, column=0, columnspan=3, sticky="ew")
         
-        self.lbl_logo = ctk.CTkLabel(self.topbar, text="🌊 SONNET", text_color="#3a7ebf", font=ctk.CTkFont(size=20, weight="bold"))
+        try:
+            logo_img = Image.open("assets/logo.png")
+            # Calculate aspect ratio to fit within 30px height
+            aspect = logo_img.width / logo_img.height
+            new_w = int(30 * aspect)
+            self.ctk_logo = ctk.CTkImage(light_image=logo_img, dark_image=logo_img, size=(new_w, 30))
+            self.lbl_logo = ctk.CTkLabel(self.topbar, text=" SONNET", image=self.ctk_logo, compound="left", text_color="#3a7ebf", font=ctk.CTkFont(size=20, weight="bold"))
+        except Exception as e:
+            self.lbl_logo = ctk.CTkLabel(self.topbar, text="🌊 SONNET", text_color="#3a7ebf", font=ctk.CTkFont(size=20, weight="bold"))
+            
         self.lbl_logo.pack(side="left", padx=20, pady=10)
         
         self.btn_snapshots = ctk.CTkButton(self.topbar, text="🖼️ SNAPSHOT GALLERY", width=140, command=self.open_snapshots, fg_color="#b85c14", hover_color="#d97a32")
         self.btn_snapshots.pack(side="left", padx=30)
+        
+        self.btn_report = ctk.CTkButton(self.topbar, text="📄 EXPORT REPORT", width=140, command=self.generate_report, fg_color="#3a7ebf", hover_color="#285a8a")
+        self.btn_report.pack(side="left", padx=10)
         
         self.btn_load_gps = ctk.CTkButton(self.topbar, text="LOAD GPS", width=100, command=self.load_gps, fg_color="#444466")
         self.btn_load_gps.pack(side="right", padx=10)
@@ -186,12 +200,71 @@ class SonnetApp(ctk.CTk):
 
         self.target_counter = 0
 
+    def generate_report(self):
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas
+            import datetime
+            
+            os.makedirs("reports", exist_ok=True)
+            filename = f"reports/SONNET_Mission_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            
+            c = canvas.Canvas(filename, pagesize=letter)
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(50, 750, "SONNET: Mission Debrief Report")
+            
+            c.setFont("Helvetica", 10)
+            c.drawString(50, 730, f"Date/Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            media_str = self.media_path if self.media_path else 'None'
+            if len(media_str) > 70: media_str = "..." + media_str[-67:]
+            c.drawString(50, 715, f"Media Source: {media_str}")
+            
+            y = 680
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(50, y, "Detected Anomalies Summary:")
+            y -= 20
+            c.setFont("Helvetica", 10)
+            for cls, count in self.stats.items():
+                if count > 0:
+                    c.drawString(60, y, f"- {cls.replace('_', ' ').title()}: {count}")
+                    y -= 15
+                    
+            y -= 20
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(50, y, "Recent Snapshot Log:")
+            y -= 20
+            
+            images = [f for f in os.listdir(self.snapshots_dir) if f.endswith(('.png', '.jpg'))]
+            images.sort(reverse=True)
+            
+            for img_name in images[:4]: 
+                if y < 150:
+                    c.showPage()
+                    y = 750
+                
+                img_path = os.path.join(self.snapshots_dir, img_name)
+                c.setFont("Helvetica", 10)
+                c.drawString(50, y, f"Snapshot: {img_name}")
+                try:
+                    c.drawImage(img_path, 50, y - 110, width=100, height=100, preserveAspectRatio=True)
+                except Exception as e:
+                    c.drawString(50, y - 20, "[Image Load Error]")
+                y -= 130
+                
+            c.save()
+            
+            self.btn_report.configure(text="✅ SAVED TO /reports", fg_color="#2b8a3e")
+            self.after(3000, lambda: self.btn_report.configure(text="📄 EXPORT REPORT", fg_color="#3a7ebf"))
+            os.startfile(os.path.abspath(filename))
+        except Exception as e:
+            print("Report error:", e)
+
     def open_snapshots(self):
         snap_win = ctk.CTkToplevel(self)
         snap_win.title("Snapshot Gallery")
         snap_win.geometry("700x500")
         try:
-            snap_win.iconbitmap("icon.ico")
+            snap_win.iconbitmap("assets/icon.ico")
         except:
             pass
         
@@ -296,7 +369,7 @@ class SonnetApp(ctk.CTk):
                 pass
 
     def load_media(self):
-        file_path = filedialog.askopenfilename(filetypes=[("Media Files", "*.mp4 *.avi *.mkv *.mov *.jpg *.jpeg *.png"), ("All Files", "*.*")])
+        file_path = filedialog.askopenfilename(filetypes=[("Media Files", "*.mp4 *.avi *.mkv *.mov *.jpg *.jpeg *.png *.xtf"), ("All Files", "*.*")])
         if file_path:
             self.media_path = file_path
             filename = os.path.basename(file_path)
@@ -306,6 +379,9 @@ class SonnetApp(ctk.CTk):
             if ext in ['.jpg', '.jpeg', '.png']:
                 self.is_image = True
                 self.btn_play.configure(text="▶ DETECT IMAGE")
+            elif ext == '.xtf':
+                self.is_image = False
+                self.btn_play.configure(text="▶ PLAY XTF")
             else:
                 self.is_image = False
                 self.btn_play.configure(text="▶ PLAY VIDEO")
@@ -316,6 +392,14 @@ class SonnetApp(ctk.CTk):
             
         if self.is_image:
             threading.Thread(target=self.process_image, daemon=True).start()
+        elif self.media_path.lower().endswith('.xtf'):
+            if not self.is_playing:
+                self.is_playing = True
+                self.btn_play.configure(text="⏸ PAUSE XTF", fg_color="#c92a2a")
+                threading.Thread(target=self.play_xtf_loop, daemon=True).start()
+            else:
+                self.is_playing = False
+                self.btn_play.configure(text="▶ PLAY XTF", fg_color="#2b8a3e")
         else:
             if not self.is_playing:
                 self.is_playing = True
@@ -396,6 +480,81 @@ class SonnetApp(ctk.CTk):
             self.cap.release()
             self.cap = None
             
+    def play_xtf_loop(self):
+        try:
+            (fh, p) = pyxtf.xtf_read(self.media_path)
+            sonar_packets = p[pyxtf.XTFHeaderType.sonar]
+            if not sonar_packets:
+                print("No sonar packets found in XTF")
+                self.is_playing = False
+                return
+                
+            ping_count = len(sonar_packets)
+            frame_size = 500 
+            
+            self.start_time = time.time()
+            self.frames_processed = 0
+            
+            if not hasattr(self, 'custom_tracker'):
+                self.custom_tracker = [] 
+                self.global_id_counter = 0
+            else:
+                self.custom_tracker = [] 
+                
+            for i in range(0, ping_count, frame_size):
+                if not self.is_playing:
+                    break
+                    
+                chunk = sonar_packets[i:i+frame_size]
+                
+                port_data = []
+                stbd_data = []
+                for packet in chunk:
+                    if len(packet.data) >= 2:
+                        port_data.append(packet.data[0])
+                        stbd_data.append(packet.data[1])
+                
+                if not port_data: continue
+                
+                port_img = np.vstack(port_data)
+                stbd_img = np.vstack(stbd_data)
+                port_img = np.fliplr(port_img)
+                combined = np.hstack((port_img, stbd_img))
+                
+                combined = combined.astype(np.float32)
+                p2, p98 = np.percentile(combined, (2, 98))
+                if p98 > p2:
+                    combined = np.clip((combined - p2) / (p98 - p2), 0, 1)
+                combined = (combined * 255).astype(np.uint8)
+                
+                bgr_frame = cv2.cvtColor(combined, cv2.COLOR_GRAY2BGR)
+                
+                self.frames_processed += 1
+                conf = self.conf_slider.get()
+                iou = self.iou_slider.get()
+                max_det = int(self.max_det_slider.get())
+                
+                elapsed = time.time() - self.start_time
+                if elapsed > 0:
+                    fps = self.frames_processed / elapsed
+                    self.after(0, lambda f=fps: self.lbl_fps.configure(text=f"FPS: {f:.1f}"))
+                
+                if model is not None:
+                    results = model.track(bgr_frame, conf=conf, iou=iou, max_det=max_det, persist=True, tracker="bytetrack.yaml", verbose=False)
+                    res_frame = results[0].plot(conf=False)
+                    self.process_detections(results[0], f"XTF-{i//frame_size}", res_frame, is_video=True)
+                else:
+                    res_frame = bgr_frame
+                    
+                self.display_frame(res_frame)
+                time.sleep(0.1)
+                
+        except Exception as e:
+            print("XTF Playback Error:", e)
+            
+        self.is_playing = False
+        self.after(0, lambda: self.btn_play.configure(text="▶ PLAY XTF", fg_color="#2b8a3e"))
+
     def process_detections(self, result, time_frame, res_frame, is_video=False):
         boxes = result.boxes
         if len(boxes) > 0:

@@ -4,5 +4,5 @@ echo ===================================================
 echo Starting SONNET - Sonar Target Detection App...
 echo ===================================================
 cd /d "%~dp0"
-python advanced_app.py
+python src/main.py
 pause
