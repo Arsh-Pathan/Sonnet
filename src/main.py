@@ -63,6 +63,13 @@ class SonnetApp(ctk.CTk):
         self.stop_requested = False
         self.play_thread = None
 
+        # XTF Continuous Waterfall Streaming State
+        self.xtf_packets = []
+        self.xtf_ping_idx = 0
+        self.xtf_waterfall_buffer = None
+        self.xtf_window_lines = 480
+        self.xtf_step = 8
+
         # DSP & Visual Enhancement
         self.active_colormap = "Default"
         self.clahe_enabled = False
@@ -963,13 +970,21 @@ class SonnetApp(ctk.CTk):
                 self.on_right_view_changed("📡 Live Acoustic A-Scan")
             try:
                 (fh, p) = pyxtf.xtf_read(self.media_path)
-                packets = p[pyxtf.XTFHeaderType.sonar]
-                if packets and len(packets) > 0:
-                    init_chunk = packets[:min(500, len(packets))]
+                self.xtf_packets = p[pyxtf.XTFHeaderType.sonar]
+                if self.xtf_packets:
+                    self.total_frames = len(self.xtf_packets)
+                    self.xtf_ping_idx = 0
+                    self.scrub_slider.configure(to=max(1, self.total_frames - 1))
+                    self.scrub_slider.set(0)
+                    self.lbl_time_status.configure(text=f"Ping 0 / {self.total_frames}")
+
+                    # Initialize rolling waterfall buffer with first window
+                    init_chunk = self.xtf_packets[:min(self.xtf_window_lines, len(self.xtf_packets))]
                     init_frame, init_ping = self.render_xtf_chunk(init_chunk)
                     if init_frame is not None:
                         h, w = init_frame.shape[:2]
                         self.lbl_resolution.configure(text=f"{w}x{h}")
+                        self.xtf_waterfall_buffer = init_frame.copy()
                         self.display_frame(self.apply_dsp_filters(init_frame))
                     if init_ping is not None:
                         self.update_ascan(init_ping)
@@ -1052,10 +1067,30 @@ class SonnetApp(ctk.CTk):
         self.update_time_label(0)
 
     def on_scrub_slide(self, value):
-        if self.is_image or self.is_xtf or not self.cap or not self.cap.isOpened():
+        if self.is_image:
             return
 
         target_frame = int(value)
+
+        # XTF timeline scrubbing
+        if self.is_xtf:
+            if not self.xtf_packets or target_frame >= len(self.xtf_packets):
+                return
+            self.xtf_ping_idx = target_frame
+            win_start = max(0, target_frame - self.xtf_window_lines + 1)
+            chunk = self.xtf_packets[win_start:target_frame + 1]
+            frame, ascan = self.render_xtf_chunk(chunk)
+            if frame is not None:
+                self.xtf_waterfall_buffer = frame.copy()
+                self.display_frame(self.apply_dsp_filters(frame))
+            if ascan is not None:
+                self.after(0, lambda s=ascan: self.update_ascan(s))
+            self.lbl_time_status.configure(text=f"Ping {target_frame} / {self.total_frames}")
+            return
+
+        if not self.cap or not self.cap.isOpened():
+            return
+
         self.current_frame_idx = target_frame
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
         ret, frame = self.cap.read()
@@ -1219,51 +1254,95 @@ class SonnetApp(ctk.CTk):
 
     def play_xtf_loop(self):
         try:
-            (fh, p) = pyxtf.xtf_read(self.media_path)
-            sonar_packets = p[pyxtf.XTFHeaderType.sonar]
-            if not sonar_packets:
+            if not self.xtf_packets:
+                (fh, p) = pyxtf.xtf_read(self.media_path)
+                self.xtf_packets = p[pyxtf.XTFHeaderType.sonar]
+
+            if not self.xtf_packets:
                 print("No sonar packets found in XTF")
                 self.is_playing = False
                 return
 
-            ping_count = len(sonar_packets)
-            frame_size = 500
+            ping_count = len(self.xtf_packets)
             self.start_time = time.time()
             self.frames_processed = 0
 
-            for i in range(0, ping_count, frame_size):
-                if not self.is_playing:
+            # If at end, loop back to start
+            if self.xtf_ping_idx >= ping_count - 1:
+                self.xtf_ping_idx = 0
+
+            # Ensure waterfall buffer is initialized with starting window
+            if self.xtf_waterfall_buffer is None:
+                win_start = max(0, self.xtf_ping_idx - self.xtf_window_lines + 1)
+                init_chunk = self.xtf_packets[win_start:self.xtf_ping_idx + self.xtf_window_lines]
+                init_frame, _ = self.render_xtf_chunk(init_chunk)
+                if init_frame is not None:
+                    self.xtf_waterfall_buffer = init_frame.copy()
+
+            step = self.xtf_step
+            detect_counter = 0
+
+            while self.is_playing and self.xtf_ping_idx < ping_count and not self.stop_requested:
+                next_idx = min(ping_count, self.xtf_ping_idx + step)
+                new_chunk = self.xtf_packets[self.xtf_ping_idx:next_idx]
+                if not new_chunk:
                     break
 
-                chunk = sonar_packets[i:i + frame_size]
-                bgr_frame, ascan_slice = self.render_xtf_chunk(chunk)
-                if bgr_frame is None:
-                    continue
+                new_lines, ascan_slice = self.render_xtf_chunk(new_chunk)
+                if new_lines is not None:
+                    k = new_lines.shape[0]
+                    # Smooth waterfall scroll: roll buffer upward, append new ping lines at the bottom
+                    if self.xtf_waterfall_buffer is not None and self.xtf_waterfall_buffer.shape[1] == new_lines.shape[1]:
+                        self.xtf_waterfall_buffer = np.vstack([self.xtf_waterfall_buffer[k:], new_lines])
+                    else:
+                        self.xtf_waterfall_buffer = new_lines.copy()
+
+                    current_display = self.xtf_waterfall_buffer
+
+                    # Run model detection periodically on rolling waterfall frame
+                    conf = self.conf_slider.get()
+                    iou = self.iou_slider.get()
+                    detect_counter += 1
+
+                    if self.model is not None and (detect_counter % 2 == 0):
+                        results = self.model.track(
+                            current_display,
+                            conf=conf,
+                            iou=iou,
+                            persist=True,
+                            tracker="bytetrack.yaml",
+                            verbose=False
+                        )
+                        res_frame = results[0].plot(conf=False)
+                        self.process_detections(results[0], f"XTF-P{self.xtf_ping_idx}", res_frame, is_video=True)
+                    else:
+                        res_frame = current_display
+
+                    final_frame = self.apply_dsp_filters(res_frame)
+                    self.display_frame(final_frame)
 
                 if ascan_slice is not None:
                     self.after(0, lambda s=ascan_slice: self.update_ascan(s))
+
+                self.xtf_ping_idx = next_idx
                 self.frames_processed += 1
-                conf = self.conf_slider.get()
-                iou = self.iou_slider.get()
+
+                # Update scrubber and ping readout
+                cur_p = self.xtf_ping_idx
+                self.after(0, lambda p=cur_p: self.scrub_slider.set(p))
+                self.after(0, lambda p=cur_p: self.lbl_time_status.configure(text=f"Ping {p} / {ping_count}"))
 
                 elapsed = time.time() - self.start_time
                 if elapsed > 0:
                     fps = self.frames_processed / elapsed
                     self.after(0, lambda f=fps: self.lbl_fps.configure(text=f"FPS: {f:.1f}"))
 
-                if self.model is not None:
-                    results = self.model.track(bgr_frame, conf=conf, iou=iou, persist=True, tracker="bytetrack.yaml", verbose=False)
-                    res_frame = results[0].plot(conf=False)
-                    self.process_detections(results[0], f"XTF-{i // frame_size}", res_frame, is_video=True)
-                else:
-                    res_frame = bgr_frame
-
-                final_frame = self.apply_dsp_filters(res_frame)
-                self.display_frame(final_frame)
-                time.sleep(0.1 / max(0.25, self.playback_speed))
+                # Calibrated streaming sleep interval responsive to playback speed
+                base_delay = 0.035
+                time.sleep(base_delay / max(0.25, self.playback_speed))
 
         except Exception as e:
-            print("XTF Playback Error:", e)
+            print("XTF Waterfall Streaming Error:", e)
 
         self.is_playing = False
         self.after(0, lambda: self.btn_play.configure(text="▶ PLAY XTF", fg_color="#2b8a3e"))
