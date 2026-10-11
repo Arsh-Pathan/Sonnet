@@ -561,13 +561,21 @@ class SonnetApp(ctk.CTk):
             # Patch tkintermapview for Python 3.12+ / 3.14 thread-safe PhotoImage creation
             if not getattr(tkintermapview.TkinterMapView, "_photoimage_thread_patched", False):
                 def _patched_request_image(self, zoom: int, x: int, y: int, db_cursor=None):
-                    try:
-                        url = self.tile_server.replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(zoom))
-                        resp = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=6)
-                        if resp.status_code == 200:
-                            return Image.open(io.BytesIO(resp.content))
-                    except Exception:
-                        pass
+                    urls = [
+                        self.tile_server.replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(zoom)),
+                        f"https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{zoom}/{y}/{x}",
+                        f"https://services.arcgisonline.com/arcgis/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{zoom}/{y}/{x}",
+                        f"https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={zoom}&s=Ga",
+                        f"https://a.tile.openstreetmap.org/{zoom}/{x}/{y}.png"
+                    ]
+                    for url in urls:
+                        try:
+                            resp = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=4)
+                            if resp.status_code == 200 and len(resp.content) > 100:
+                                image = Image.open(io.BytesIO(resp.content))
+                                return image
+                        except Exception:
+                            continue
                     return self.empty_tile_image
 
                 def _patched_update_canvas_tile_images(self):
@@ -597,7 +605,7 @@ class SonnetApp(ctk.CTk):
 
             self.map_widget = tkintermapview.TkinterMapView(self.right_sidebar, width=310, height=250, corner_radius=6)
             self.map_widget.pack(padx=14, pady=2)
-            self.map_widget.set_tile_server("https://mt0.google.com/vt/lyrs=s&hl=en&x={x}&y={y}&z={z}&s=Ga", max_zoom=22)
+            self.map_widget.set_tile_server("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", max_zoom=19)
             self.map_widget.set_position(0, 0)
             self.map_widget.set_zoom(1)
 
@@ -1697,7 +1705,13 @@ class SonnetApp(ctk.CTk):
                         pass
 
                 if len(path_coords) >= 2:
-                    self.map_widget.set_path(path_coords)
+                    render_coords = path_coords
+                    if len(render_coords) > 1000:
+                        step = max(1, len(render_coords) // 1000)
+                        render_coords = render_coords[::step]
+                        if path_coords[-1] != render_coords[-1]:
+                            render_coords.append(path_coords[-1])
+                    self.map_widget.set_path(render_coords)
                     self.map_widget.set_position(path_coords[0][0], path_coords[0][1])
                     self.map_widget.set_zoom(15)
                 elif len(path_coords) == 1:
